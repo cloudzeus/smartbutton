@@ -60,10 +60,14 @@ PORT=3000
 ### 4. Add Environment Variables
 Add all the environment variables listed above in the Coolify environment section.
 
+**⚠️ IMPORTANT**: These environment variables are required **during the Docker build process**, not just at runtime. Make sure they are set in Coolify BEFORE clicking deploy.
+
 **Important**: Generate a secure `AUTH_SECRET`:
 ```bash
 openssl rand -base64 32
 ```
+
+**Note on Secrets in Docker**: The warnings about "SecretsUsedInArgOrEnv" are expected and safe to ignore. The secrets are only used during build time and are not stored in the final Docker image.
 
 ### 5. Database Setup
 - Create a PostgreSQL database in Coolify
