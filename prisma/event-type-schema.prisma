@@ -1,0 +1,16 @@
+// Model for storing Yeastar PBX event type definitions
+model PBXEventType {
+  id          String   @id @default(cuid())
+  eventId     String?  @unique // Yeastar event ID (e.g., "30007")
+  eventName   String   @unique // Event name (e.g., "NewCdr", "ExtensionStatus")
+  category    String   // CALL, EXTENSION, TRUNK, SYSTEM, CONFERENCE, QUEUE, SECURITY
+  description String   @db.Text
+  severity    String   // INFO, SUCCESS, WARNING, ERROR
+  fields      Json?    // Expected fields in the event payload
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([eventName])
+}

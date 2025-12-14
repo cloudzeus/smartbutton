@@ -1,0 +1,249 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Auth.js models
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  password      String?
+  image         String?
+  role          UserRole  @default(EMPLOYEE)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  accounts      Account[]
+  sessions      Session[]
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  EMPLOYEE
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  
+  @@unique([identifier, token])
+}
+
+// Access Management Models
+model MenuGroup {
+  id          String     @id @default(cuid())
+  name        String     @unique
+  label       String
+  icon        String?
+  order       Int        @default(0)
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  menuItems   MenuItem[]
+  permissions RolePermission[]
+}
+
+model MenuItem {
+  id          String     @id @default(cuid())
+  menuGroupId String
+  menuGroup   MenuGroup  @relation(fields: [menuGroupId], references: [id], onDelete: Cascade)
+  
+  name        String
+  label       String
+  path        String
+  icon        String?
+  order       Int        @default(0)
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  permissions RolePermission[]
+  
+  @@unique([menuGroupId, name])
+  @@index([menuGroupId])
+}
+
+model RolePermission {
+  id          String     @id @default(cuid())
+  role        UserRole
+  
+  menuGroupId String?
+  menuGroup   MenuGroup? @relation(fields: [menuGroupId], references: [id], onDelete: Cascade)
+  
+  menuItemId  String?
+  menuItem    MenuItem?  @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  
+  canView     Boolean    @default(true)
+  canCreate   Boolean    @default(false)
+  canEdit     Boolean    @default(false)
+  canDelete   Boolean    @default(false)
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  @@unique([role, menuGroupId, menuItemId])
+  @@index([role])
+  @@index([menuGroupId])
+  @@index([menuItemId])
+}
+
+// PBX Settings model to store connection configuration
+model PBXSettings {
+  id            String   @id @default(cuid())
+  name          String   @default("default")
+  pbxIp         String
+  pbxPort       String
+  clientId      String?
+  clientSecret  String?
+  websocketUrl  String?
+  webhookSecret String?
+  isActive      Boolean  @default(true)
+
+  // Token Storage for Persistence
+  accessToken   String?  @db.Text
+  refreshToken  String?  @db.Text
+  tokenExpiry   DateTime?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@unique([name])
+}
+
+// Extension model to track PBX extensions
+model Extension {
+  id            String   @id @default(cuid())
+  extensionId   String   @unique
+  name          String?
+  status        String   @default("offline") // online, offline, busy, ringing, etc.
+  isSynced      Boolean  @default(false)
+  
+  // SIP Configuration
+  sipServer     String?
+  sipUser       String?
+  sipPassword   String?
+  
+  // Extended PBX Details
+  email         String?
+  mobileNumber  String?
+  presenceStatus String?
+  
+  lastSeen      DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  
+  callEvents    CallEvent[]
+}
+
+// Call model to track individual calls
+model Call {
+  id            String   @id @default(cuid())
+  callId        String   @unique
+  extensionId   String?
+  
+  direction     String   // inbound, outbound, internal
+  fromNumber    String
+  toNumber      String
+  status        String   // ringing, answered, ended, missed, etc.
+  
+  startTime     DateTime @default(now())
+  answerTime    DateTime?
+  endTime       DateTime?
+  duration      Int?     // in seconds
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  events        CallEvent[]
+  
+  @@index([extensionId])
+  @@index([status])
+  @@index([startTime])
+}
+
+// CallEvent model to track all events related to calls
+model CallEvent {
+  id            String   @id @default(cuid())
+  callId        String
+  call          Call     @relation(fields: [callId], references: [id])
+  
+  extensionId   String?
+  extension     Extension? @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  
+  eventType     String   // RING, ANSWER, HANGUP, HOLD, TRANSFER, etc.
+  eventData     Json?    // Store additional event data
+  
+  timestamp     DateTime @default(now())
+  
+  @@index([callId])
+  @@index([eventType])
+  @@index([timestamp])
+}
+
+// SystemEvent model to track all WebSocket events from PBX
+model SystemEvent {
+  id            String   @id @default(cuid())
+  eventType     String
+  eventData     Json     // Store the full event payload
+  timestamp     DateTime @default(now())
+  
+  @@index([eventType])
+  @@index([timestamp])
+}
+
+// PBXEventType model to store Yeastar event type definitions
+model PBXEventType {
+  id          String   @id @default(cuid())
+  eventId     String?  @unique // Yeastar event ID (e.g., "30007")
+  eventName   String   @unique // Event name (e.g., "NewCdr", "ExtensionStatus")
+  category    String   // CALL, EXTENSION, TRUNK, SYSTEM, CONFERENCE, QUEUE, SECURITY
+  description String   @db.Text
+  severity    String   // INFO, SUCCESS, WARNING, ERROR
+  fields      Json?    // Expected fields in the event payload
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([eventName])
+}
