@@ -24,6 +24,11 @@ export const metadata: Metadata = {
   description: "Yearstar P550 Gateway Management Dashboard",
 };
 
+// Force dynamic rendering for all pages
+export const dynamic = 'force-dynamic';
+export const dynamicParams = true;
+
+
 export default function RootLayout({
   children,
 }: Readonly<{

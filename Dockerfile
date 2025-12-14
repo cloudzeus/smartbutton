@@ -33,6 +33,10 @@ ENV YEASTAR_CLIENT_SECRET=$YEASTAR_CLIENT_SECRET
 ENV YEASTAR_WEBSOCKET_SECRET=$YEASTAR_WEBSOCKET_SECRET
 ENV GOOGLE_APPLICATION_CREDENTIALS_JSON=$GOOGLE_APPLICATION_CREDENTIALS_JSON
 
+# CRITICAL: Unset NODE_ENV during build (Next.js will use its own defaults)
+# Coolify may pass NODE_ENV as build arg which breaks Next.js build
+ENV NODE_ENV=
+
 # NOTE: NODE_ENV should NOT be set during build - only at runtime
 COPY package.json package-lock.json ./
 COPY --from=dependencies /app/node_modules ./node_modules
