@@ -40,17 +40,29 @@ export async function POST(request: NextRequest) {
 
         // Extract event info from new structure
         // Structure: { eventType: "DEVICE_DATA", data: { deviceProfile: { sn, ... }, tslId: "button_event", payload: { status: "1" } } }
-        const eventType = body.eventType;
+        const eventType = body.eventType || body.type;
+
+        // Handle Test Event
+        if (eventType === 'WEBHOOK_TEST') {
+            console.log('✅ Received Webhook Test Event');
+            return NextResponse.json({ success: true, message: 'Webhook Test Successful' });
+        }
+
         const deviceData = body.data || {};
         const profile = deviceData.deviceProfile || {};
 
-        const sn = profile.sn; // Serial Number is the reliable identifier
+        // Robust SN Extraction (Check multiple paths)
+        const sn = profile.sn || deviceData.sn || body.sn || body.serialNumber;
+
         const tslId = deviceData.tslId;
         const payload = deviceData.payload || {};
-        const isButtonPressed = tslId === 'button_event' && String(payload.status) === '1';
+        // Check "status" or "value" or just payload itself if it's the button
+        const isButtonPressed = (tslId === 'button_event' && String(payload.status) === '1') ||
+            (body.event === 'button_press'); // Legacy/Simple format check?
 
         // Validate required fields
         if (!sn) {
+            console.error('❌ Missing SN in webhook payload:', JSON.stringify(body));
             return NextResponse.json(
                 { success: false, error: 'Missing device SN' },
                 { status: 400 }
