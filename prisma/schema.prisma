@@ -170,6 +170,55 @@ enum RecipientType {
   EXTERNAL   // External phone number
 }
 
+// Milesight Smart Button Devices
+model MilesightDevice {
+  id              String    @id @default(cuid())
+  deviceId        String    @unique // Milesight device ID
+  deviceName      String    // Device name from Milesight
+  deviceType      String?   // Device type (e.g., "button", "sensor")
+  deviceModel     String?   // Device model
+  serialNumber    String?   // Serial number
+  
+  // Device attributes (JSON)
+  attributes      Json?     // All device attributes from Milesight
+  
+  // Extension assignment
+  assignedExtensionId String? // Extension ID this device triggers
+  assignedExtension   Extension? @relation(fields: [assignedExtensionId], references: [id], onDelete: SetNull)
+  
+  // Sync info
+  lastSyncedAt    DateTime  @default(now())
+  isActive        Boolean   @default(true)
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  @@index([deviceId])
+  @@index([assignedExtensionId])
+  @@index([isActive])
+}
+
+// Device Alert Recipients - Who to call when device issues occur
+model DeviceAlertRecipient {
+  id          String        @id @default(cuid())
+  number      String        // Extension number or external phone number
+  label       String        // Display name (e.g., "IT Support", "Maintenance")
+  type        RecipientType @default(EXTENSION)
+  order       Int           @default(0) // Call order priority
+  isActive    Boolean       @default(true)
+  
+  // Alert triggers
+  notifyOnOffline    Boolean @default(true)  // Call when device goes offline
+  notifyOnLowBattery Boolean @default(true)  // Call when battery < threshold
+  batteryThreshold   Int     @default(20)    // Battery % threshold
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([order])
+  @@index([isActive])
+}
+
 // Extension model to track PBX extensions
 model Extension {
   id            String   @id @default(cuid())
@@ -192,8 +241,8 @@ model Extension {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
-  
   callEvents    CallEvent[]
+  milesightDevices MilesightDevice[] // Devices assigned to this extension
 }
 
 // Call model to track individual calls

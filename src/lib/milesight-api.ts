@@ -15,6 +15,30 @@ interface MilesightTokenResponse {
     expires_in: number;
 }
 
+interface MilesightDevice {
+    deviceId: string;
+    sn: string;
+    devEUI?: string;
+    imei?: string;
+    model: string;
+    deviceType: 'GATEWAY' | 'SUB_DEVICE' | 'COMMON';
+    licenseStatus: 'VALID' | 'INVALID';
+    connectStatus: 'ONLINE' | 'OFFLINE' | 'DISCONNECT';
+    electricity?: number; // Battery level
+    lastUpdateTime?: string;
+    name: string;
+    description?: string;
+    project?: string;
+    tag?: string[];
+    mac?: string;
+    wlanMac?: string;
+    application?: {
+        applicationId: string;
+        applicationName: string;
+    };
+    firmwareVersion?: string;
+}
+
 let cachedToken: string | null = null;
 let tokenExpiry: number | null = null;
 
@@ -110,17 +134,66 @@ export async function milesightRequest(endpoint: string, options: RequestInit = 
 }
 
 /**
- * Get list of devices from Milesight
+ * Search/Get all devices from Milesight platform
+ * Uses: GET /device-openapi/v1/devices
  */
-export async function getMilesightDevices() {
-    return milesightRequest('/api/v1/devices');
+export async function getMilesightDevices(params?: {
+    pageSize?: number;
+    pageKey?: string;
+    model?: string; // Filter by model (e.g., "WS101")
+}): Promise<{ list: MilesightDevice[]; nextPageKey?: string }> {
+    const queryParams = new URLSearchParams();
+    if (params?.pageSize) queryParams.append('pageSize', params.pageSize.toString());
+    if (params?.pageKey) queryParams.append('pageKey', params.pageKey);
+    if (params?.model) queryParams.append('model', params.model);
+
+    const endpoint = `/device-openapi/v1/devices${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return milesightRequest(endpoint);
 }
 
 /**
- * Get device details
+ * Get specific device details
+ * Uses: GET /device-openapi/v1/devices/{deviceId}
  */
-export async function getMilesightDevice(deviceId: string) {
-    return milesightRequest(`/api/v1/devices/${deviceId}`);
+export async function getMilesightDevice(deviceId: string): Promise<MilesightDevice> {
+    return milesightRequest(`/device-openapi/v1/devices/${deviceId}`);
+}
+
+/**
+ * Get device configuration
+ * Uses: GET /device-openapi/v1/devices/{deviceId}/config
+ */
+export async function getDeviceConfig(deviceId: string) {
+    return milesightRequest(`/device-openapi/v1/devices/${deviceId}/config`);
+}
+
+/**
+ * Get device TSL (Thing Specification Language) model
+ * Defines what the device can report and configure
+ * Uses: GET /device-openapi/v1/devices/{deviceId}/thing-specification
+ */
+export async function getDeviceTSL(deviceId: string) {
+    return milesightRequest(`/device-openapi/v1/devices/${deviceId}/thing-specification`);
+}
+
+/**
+ * Get device historical properties data
+ * Uses: GET /device-openapi/v1/devices/{deviceId}/properties/history
+ */
+export async function getDeviceHistory(deviceId: string, params?: {
+    startTime?: number;
+    endTime?: number;
+    pageSize?: number;
+    nextPageKey?: string;
+}) {
+    const queryParams = new URLSearchParams();
+    if (params?.startTime) queryParams.append('startTime', params.startTime.toString());
+    if (params?.endTime) queryParams.append('endTime', params.endTime.toString());
+    if (params?.pageSize) queryParams.append('pageSize', params.pageSize.toString());
+    if (params?.nextPageKey) queryParams.append('nextPageKey', params.nextPageKey);
+
+    const endpoint = `/device-openapi/v1/devices/${deviceId}/properties/history${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return milesightRequest(endpoint);
 }
 
 /**
@@ -144,3 +217,5 @@ export function verifyMilesightWebhook(payload: string, signature: string | null
 
     return true;
 }
+
+export type { MilesightDevice, MilesightConfig };
