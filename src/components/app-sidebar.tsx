@@ -190,7 +190,7 @@ export function AppSidebar() {
                         </SidebarGroupLabel>
                         <SidebarGroupContent>
                             <SidebarMenu>
-                                {group.items.map((item) => (
+                                {group.items.map((item: any) => (
                                     <SidebarMenuItem key={item.url}>
                                         <SidebarMenuButton
                                             asChild
