@@ -4,7 +4,7 @@ import { getAccessToken, getSettings } from '@/lib/yeastar-api';
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { extension, promptName = 'alert', autoAnswer = 'no', volume = 15, dialPermission } = body;
+        const { extension, promptName = 'alert', autoAnswer = 'no', volume = 15, dialPermission, playCount = 1 } = body;
 
         if (!extension) {
             return NextResponse.json(
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
         const payload: any = {
             number: extension,           // The target number
             prompts: [promptName],       // Array of prompt names
-            count: 1,                    // Frequency
+            count: playCount,            // Frequency
             auto_answer: autoAnswer,     // 'yes' or 'no'
             volume: volume               // 0-20
         };

@@ -1,3 +1,4 @@
+
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { verifyMilesightWebhook } from '@/lib/milesight-api';
@@ -90,10 +91,10 @@ export async function POST(request: NextRequest) {
         console.log(`🔔 Button Pressed in ${deviceName} (Ext: ${extensionNumber})`);
         console.log(`📞 Starting Alert Sequence to configured recipients...`);
 
-        // Trigger Alert Sequence (Call configured recipients)
-        triggerAlertSequence(extensionNumber, deviceName).catch(err => {
-            console.error('❌ Alert sequence error:', err);
-        });
+        // Trigger Alert Sequence (Background)
+        // Do NOT await this, otherwise Milesight will timeout and retry the webhook
+        triggerAlertSequence(extensionNumber, deviceName)
+            .catch(err => console.error('❌ Error in alert sequence:', err));
 
         return NextResponse.json({
             success: true,
@@ -119,115 +120,165 @@ async function triggerAlertSequence(originExtension: string, originName: string)
     console.log(`🚨 Starting alert sequence from: ${originName} (${originExtension})`);
 
     // Update extension status to RINGING (triggers frontend alert)
+    // This is purely visual for the System View
     await updateExtensionStatus(originExtension, 'ringing');
 
-    // Get all active alert recipients in order
-    const recipients = await prisma.alertRecipient.findMany({
-        where: { isActive: true },
-        orderBy: { order: 'asc' }
-    });
+    try {
+        // Get all active alert recipients in order
+        const recipients = await prisma.alertRecipient.findMany({
+            where: { isActive: true },
+            orderBy: { order: 'asc' }
+        });
 
-    if (recipients.length === 0) {
-        console.warn('⚠️ No alert recipients configured in PBX Settings!');
-        await updateExtensionStatus(originExtension, 'online'); // Reset status
-        return;
-    }
+        if (recipients.length === 0) {
+            console.warn('⚠️ No alert recipients configured in PBX Settings!');
+            return;
+        }
 
-    console.log(`📞 Found ${recipients.length} recipients to call`);
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
-    // Get base URL for API calls
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        const settings = await prisma.pBXSettings.findFirst({
+            where: { isActive: true }
+        });
+        const announcementName = settings?.smartButtonAnnouncement || 'alert';
+        const dialPermission = settings?.outboundPermissionExtension || undefined;
 
-    let anyAnswered = false;
+        console.log(`🚀 STARTING ALERT SEQUENCE from Button (Ext: ${originExtension})`);
+        console.log(`📋 Found ${recipients.length} configured recipients.`);
 
-    // Fetch Announcement Name from PBX Settings
-    const settings = await prisma.pBXSettings.findFirst({
-        where: { isActive: true }
-    });
-    const announcementName = settings?.smartButtonAnnouncement || 'alert';
-    const dialPermission = settings?.outboundPermissionExtension || undefined;
+        let anyRecipientAnswered = false;
 
-    // Call each recipient in order
+        for (let i = 0; i < recipients.length; i++) {
+            const recipient = recipients[i];
+            console.log(`👉 Processing Recipient ${i + 1}/${recipients.length}: ${recipient.label} (Number: ${recipient.number})`);
 
-    for (let i = 0; i < recipients.length; i++) {
-        const recipient = recipients[i];
-        console.log(`📞 Calling recipient #${i + 1}: ${recipient.label} (${recipient.number})`);
+            // Retry logic: Try 3 times
+            const maxAttempts = 3;
+            let attempts = 0;
+            let recipientAnswered = false;
 
-        // Retry logic: Try 3 times
-        const maxAttempts = 3;
-        let attempts = 0;
-        let recipientAnswered = false;
+            while (attempts < maxAttempts && !recipientAnswered) {
+                attempts++;
+                console.log(`   🔄 Attempt ${attempts}/${maxAttempts} for ${recipient.label}...`);
 
-        while (attempts < maxAttempts && !recipientAnswered) {
-            attempts++;
-            console.log(`   🔄 Attempt ${attempts}/${maxAttempts} for ${recipient.label}...`);
-
-            try {
-                // Config Check: Prevent calling self or using self as permission
-                if (recipient.number === originExtension) {
-                    console.warn(`⚠️ Skipping recipient ${recipient.label}: Cannot call the Smart Button's own extension (${originExtension}).`);
-                    continue;
-                }
-                if (dialPermission === originExtension) {
-                    console.error(`❌ Configuration Error: Outbound Permission Extension is set to the Smart Button's extension (${originExtension}). This will cause 503 Busy. Please use a registered phone extension.`);
-                    // We proceed but it likely fails
-                }
-
-                // Initiate call via Play Prompt (Calls User -> Waits Answer -> Plays)
-                // This prevents the Origin Extension (Room Button) from ringing
-                // Pass dialPermission if configured (crucial for calling mobile numbers)
-                const result = await playAlert(recipient.number, baseUrl, announcementName, dialPermission);
-
-                if (result && result.success && result.callId) {
-                    const callId = result.callId;
-                    console.log(`   ✅ Call initiated: ${callId}`);
-
-                    // Wait for answer (with timeout)
-                    const answered = await waitForAnswer(callId, recipient.number, 30000, baseUrl);
-
-                    if (answered) {
-                        console.log(`   ✅ ${recipient.label} ANSWERED!`);
-                        recipientAnswered = true;
-                        anyAnswered = true;
-
-                        console.log(`🎉 Alert sequence complete - connected to ${recipient.label}`);
-                        break; // Stop retrying this recipient (and stop outer loop via check)
-                    } else {
-                        console.log(`   ⏭️ ${recipient.label} did not answer attempt ${attempts}.`);
+                try {
+                    // Config Check: Prevent calling self or using self as permission
+                    if (recipient.number === originExtension) {
+                        console.warn(`⚠️ Skipping recipient ${recipient.label}: Cannot call the Smart Button's own extension (${originExtension}).`);
+                        break;
                     }
-                } else {
-                    console.error(`   ❌ Failed to call ${recipient.label}:`, result?.error);
+                    if (dialPermission === originExtension) {
+                        console.error(`❌ Configuration Error: Outbound Permission Extension is set to the Smart Button's extension (${originExtension}). This will cause 503 Busy. Please use a registered phone extension.`);
+                    }
+
+                    // Initiate call via Play Prompt
+                    const result = await playAlert(recipient.number, baseUrl, announcementName, dialPermission);
+
+                    if (result && result.success && result.callId) {
+                        const callId = result.callId;
+                        console.log(`   ✅ Call initiated: ${callId}`);
+
+                        // Create Call Record in DB so waitForAnswer can track it
+                        await prisma.call.create({
+                            data: {
+                                callId: callId,
+                                extensionId: originExtension, // Associate with Smart Button extension for tracking
+                                fromNumber: originExtension,
+                                toNumber: recipient.number,
+                                direction: 'outbound',
+                                status: 'calling',
+                                startTime: new Date()
+                            }
+                        }).catch(e => console.error('Failed to create call record:', e));
+
+                        // Wait for answer (with 60s timeout)
+                        const answered = await waitForAnswer(callId, recipient.number, 60000, baseUrl);
+
+                        if (answered) {
+                            const answeredTime = new Date().toLocaleTimeString();
+                            console.log(`✅ Alert successfully delivered (Answered) by ${recipient.label} (${recipient.number}) at ${answeredTime}!`);
+
+                            recipientAnswered = true;
+                            anyRecipientAnswered = true;
+                            // Update Call Status to Completed/Ended logic? 
+                            // The listener updates status to 'connected'.
+                            // We don't need to do more, PBX call will end naturally after prompt.
+                            break; // Stop retrying this recipient
+                        } else {
+                            console.warn(`⚠️ Call to ${recipient.label} was NOT answered (Timeout/Busy/Failed).`);
+                        }
+                    } else {
+                        console.error(`❌ Call initiation failed for ${recipient.label}: ${result?.error}`);
+                    }
+
+                } catch (error) {
+                    console.error(`❌ Error Calling ${recipient.label}:`, error);
                 }
 
-            } catch (error) {
-                console.error(`   ❌ Error calling ${recipient.label}:`, error);
+                // Delay between retries
+                if (!recipientAnswered && attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                }
             }
 
-            // Delay between attempts if not answered
-            if (!recipientAnswered && attempts < maxAttempts) {
-                await new Promise(resolve => setTimeout(resolve, 5000));
+            // If this recipient answered, stop calling OTHER recipients too (Task Completed)
+            if (recipientAnswered) {
+                console.log('🎉 Task Completed: Call Answered.');
+                break;
             }
         }
 
-        if (anyAnswered) break; // Stop calling other recipients if someone answered
-    }
+        if (!anyRecipientAnswered) {
+            console.warn('⚠️ Alert sequence complete - NO ONE ANSWERED!');
+        }
 
-    if (!anyAnswered) {
-        console.warn('⚠️ Alert sequence complete - NO ONE ANSWERED!');
+    } catch (e) {
+        console.error('Error in triggerAlertSequence:', e);
+    } finally {
+        // CLEANUP: Reset Origin Extension Status to 'online'
+        // This ensures the Manual 'ringing' status is cleared
+        console.log(`🧹 Resetting manual status for Button Extension ${originExtension} to 'online'`);
+        await updateExtensionStatus(originExtension, 'online');
     }
-
-    // Reset extension status to ONLINE after sequence
-    await updateExtensionStatus(originExtension, 'online');
 }
 
 async function updateExtensionStatus(extensionId: string, status: string) {
     try {
         await prisma.extension.update({
             where: { extensionId },
-            data: { status }
+            data: { status, lastSeen: new Date() }
         });
     } catch (e) {
         console.error(`Failed to update extension ${extensionId} status to ${status}`, e);
+    }
+}
+
+async function playAlert(extensionNumber: string, baseUrl: string, promptName: string = 'alert', dialPermission?: string) {
+    try {
+        const playResponse = await fetch(`${baseUrl}/api/pbx/prompt/play`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                extension: extensionNumber,
+                promptName: promptName, // Use the passed name
+                volume: 20, // Max volume
+                dialPermission: dialPermission // Pass permission extension
+            })
+        });
+
+        const playData = await playResponse.json();
+
+        if (playData.success) {
+            console.log(`🔊 Alert prompt '${promptName}' played to extension ${extensionNumber}`);
+            return { success: true, callId: playData.data?.call_id };
+        } else {
+            console.error(`❌ Failed to play alert to ${extensionNumber}: PBX Error ${playData.error} (Code: ${playData.errcode})`);
+            return { success: false, error: playData.error };
+        }
+
+    } catch (error) {
+        console.error('Error playing alert:', error);
+        return { success: false, error: String(error) };
     }
 }
 
@@ -246,18 +297,21 @@ async function waitForAnswer(callId: string | undefined, extensionNumber: string
 
     while (Date.now() - startTime < timeout) {
         try {
-            const statusResponse = await fetch(`${baseUrl}/api/pbx/call/status?callId=${callId}`);
-            const statusData = await statusResponse.json();
+            // Direct DB Query (Avoids self-fetch deadlock)
+            const call = await prisma.call.findUnique({
+                where: { callId }
+            });
 
-            if (statusData.success && statusData.data) {
-                const status = statusData.data.status?.toLowerCase() || '';
+            if (call) {
+                const status = call.status?.toLowerCase() || '';
 
                 if (status.includes('connect') || status.includes('answer') || status.includes('up')) {
                     return true; // Call answered!
                 }
 
                 if (status.includes('end') || status.includes('fail') || status.includes('busy')) {
-                    return false; // Call failed
+                    // Wait, if it failed quickly, we should return false.
+                    return false;
                 }
             }
 
@@ -298,44 +352,7 @@ async function waitForExtensionAnswer(extensionNumber: string, timeout: number):
     return false; // Timeout
 }
 
-const ANNOUNCEMENT_NAME = 'alert'; // Change this to your desired PBX prompt filename
-
-// ... (inside triggerAlertSequence) use ANNOUNCEMENT_NAME instead of 'alert'
-// But wait, I can't put const inside replacement chunk easily if it's far away.
-// I will just update playAlert to accept the name.
-
-/**
- * Play alert prompt to the extension
- */
-async function playAlert(extensionNumber: string, baseUrl: string, promptName: string = 'alert', dialPermission?: string) {
-    try {
-        const playResponse = await fetch(`${baseUrl}/api/pbx/prompt/play`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                extension: extensionNumber,
-                promptName: promptName, // Use the passed name
-                volume: 20, // Max volume
-                dialPermission: dialPermission // Pass permission extension
-            })
-        });
-
-        const playData = await playResponse.json();
-
-        if (playData.success) {
-            console.log(`🔊 Alert prompt '${promptName}' played to extension ${extensionNumber}`);
-            return { success: true, callId: playData.data?.call_id };
-        } else {
-            console.error(`❌ Failed to play alert to ${extensionNumber}: PBX Error ${playData.error} (Code: ${playData.errcode})`);
-            return { success: false, error: playData.error };
-        }
-
-    } catch (error) {
-        console.error('Error playing alert:', error);
-    }
-}
-
-// GET endpoint for testing
+// GET endpoint for testing checks
 export async function GET() {
     return NextResponse.json({
         success: true,
@@ -343,16 +360,6 @@ export async function GET() {
         endpoint: '/api/milesight/webhook',
         method: 'POST',
         serverSide: true,
-        requiresAuth: false,
-        expectedPayload: {
-            deviceId: 'button-room-101',
-            deviceName: 'Room 101 Button',
-            event: 'button_press',
-            timestamp: '2025-12-15T10:00:00Z',
-            data: {
-                room: '101',
-                buttonType: 'emergency'
-            }
-        }
+        requiresAuth: false
     });
 }
