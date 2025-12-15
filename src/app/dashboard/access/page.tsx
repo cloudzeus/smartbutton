@@ -35,9 +35,14 @@ const roles = ["ADMIN", "MANAGER", "EMPLOYEE"]
 // Add new pages here as you create them
 const availablePages = [
     { path: "/dashboard", label: "Dashboard Overview", group: "Dashboard" },
+    { path: "/dashboard/system-view", label: "System View", group: "Dashboard" },
     { path: "/dashboard/pbx", label: "PBX Status & Live Events", group: "PBX System" },
     { path: "/dashboard/extensions", label: "Extensions Management", group: "PBX System" },
+    { path: "/dashboard/extensions/types", label: "Extension Types", group: "PBX System" },
     { path: "/dashboard/pbx/logs", label: "PBX Event Logs", group: "PBX System" },
+    { path: "/dashboard/pbx/history", label: "Call History", group: "PBX System" },
+    { path: "/dashboard/milesight/status", label: "Milesight Status", group: "Smart Devices" },
+    { path: "/dashboard/milesight/smart-buttons", label: "Smart Button Management", group: "Smart Devices" },
     { path: "/dashboard/users", label: "User Management", group: "Users & Authentication" },
     { path: "/dashboard/roles", label: "Role Management", group: "Users & Authentication" },
     { path: "/dashboard/access", label: "Access Management", group: "Users & Authentication" },

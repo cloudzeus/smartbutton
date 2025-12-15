@@ -150,23 +150,39 @@ export default function SystemViewPage() {
                         <p>No rooms found matching your search</p>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-8 xl:grid-cols-10 gap-3">
                         {filteredRooms.map((room) => {
                             const device = room.milesightDevices[0]
                             const battery = device?.attributes?.electricity
                             const isLowBattery = battery !== undefined && battery < 20
 
-                            const status = room.status?.toLowerCase() || 'offline'
-                            const isOffline = !['online', 'idle', 'ringing', 'busy', 'incall', 'calling', 'connected'].includes(status)
 
-                            // Status Style Logic (Matching Extensions Page)
+                            const status = room.status?.toLowerCase() || 'offline'
+                            const isPbxActive = ['online', 'idle', 'ringing', 'busy', 'incall', 'calling', 'connected'].includes(status)
+                            const isButtonOnline = device && device.attributes?.connectStatus === 'ONLINE'
+                            const hasProblem = !isPbxActive || !isButtonOnline
+
+                            // Correct text color logic: If problem OR active status, it's white text
+                            const useWhiteText = hasProblem || status !== 'offline' // 'offline' is covered by hasProblem, so basically always white except maybe specialized idle?
+                            // Actually, if we use gradients for everything now, text is always white.
+                            // The only time it was dark was for the "white/gray" card style.
+                            // If user wants "different gradient" for problems, it implies problems now use a gradient too (so white text).
+
+                            // Status Style Logic (Matching Extensions Page but with Problem Override)
                             const getCardStyle = () => {
+                                // 🚨 PROBLEM STATE (High Priority)
+                                if (!isPbxActive || !isButtonOnline) {
+                                    return "bg-gradient-to-br from-red-600 to-rose-700 border-red-500/30 text-white shadow-red-900/20"
+                                }
+
+                                // Normal Active States
                                 if (status === 'online' || status === 'idle') return "bg-gradient-to-br from-emerald-500 to-teal-600 border-emerald-400/20 text-white"
                                 if (status === 'ringing') return "bg-gradient-to-br from-orange-400 to-amber-500 border-orange-400/20 text-white ring-2 ring-orange-300/50"
                                 if (status === 'calling' || status === 'dialing') return "bg-gradient-to-br from-blue-500 to-cyan-600 border-blue-400/20 text-white"
                                 if (status === 'incall' || status === 'connected') return "bg-gradient-to-br from-purple-500 to-violet-600 border-purple-400/20 text-white"
-                                if (status === 'busy') return "bg-gradient-to-br from-rose-500 to-red-600 border-rose-400/20 text-white"
-                                // Offline
+                                if (status === 'busy') return "bg-gradient-to-br from-pink-500 to-rose-500 border-pink-400/20 text-white"
+
+                                // Fallback (Should be caught by Problem State usually, but just in case)
                                 return "bg-white dark:bg-zinc-900 border-border text-card-foreground"
                             }
 
@@ -196,37 +212,37 @@ export default function SystemViewPage() {
                                         border
                                     `}
                                 >
-                                    <div className="p-2.5 flex flex-col justify-between h-[85px]">
+                                    <div className="p-2 flex flex-col justify-between h-[65px]">
                                         {/* Top Section */}
                                         <div>
-                                            <div className="flex items-start justify-between leading-none mb-1">
-                                                <span className={`text-base font-bold ${isOffline ? 'text-foreground' : 'text-white'}`}>
+                                            <div className="flex items-start justify-between leading-none mb-0.5">
+                                                <span className="text-sm font-bold text-white">
                                                     {room.roomNumber || <span className="opacity-50 text-xs">--</span>}
                                                 </span>
-                                                <span className={`text-[10px] font-mono opacity-80 ${isOffline ? 'text-muted-foreground' : 'text-white/80'}`}>
+                                                <span className="text-[9px] font-mono opacity-80 text-white/80">
                                                     #{room.extensionId}
                                                 </span>
                                             </div>
-                                            <div className={`text-[10px] truncate ${isOffline ? 'text-muted-foreground' : 'text-white/70'}`}>
+                                            <div className="text-[9px] truncate text-white/70">
                                                 {room.name || '-'}
                                             </div>
                                         </div>
 
                                         {/* Footer Badges */}
-                                        <div className="flex items-end gap-1.5">
+                                        <div className="flex items-end gap-1">
                                             {/* PBX Status Badge */}
-                                            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-neutral-900/40 text-white border border-white/10 shadow-sm backdrop-blur-md h-5">
-                                                <span className={`w-1.5 h-1.5 rounded-full ${getDotColor()} ${status === 'ringing' ? 'animate-pulse' : ''}`} />
-                                                <span className="text-[9px] font-medium tracking-wider uppercase leading-none opacity-90">
+                                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-gray-900 text-white border border-white/10 shadow-sm h-4">
+                                                <span className={`w-1 h-1 rounded-full ${getDotColor()} ${status === 'ringing' ? 'animate-pulse' : ''}`} />
+                                                <span className="text-[8px] font-medium tracking-wider uppercase leading-none opacity-90">
                                                     {status}
                                                 </span>
                                             </div>
 
                                             {/* Smart Button Badge */}
-                                            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-neutral-900/40 text-white border border-white/10 shadow-sm backdrop-blur-md h-5">
-                                                <span className={`w-1.5 h-1.5 rounded-full ${getButtonDotColor()}`} />
+                                            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-gray-900 text-white border border-white/10 shadow-sm h-4">
+                                                <span className={`w-1 h-1 rounded-full ${getButtonDotColor()}`} />
                                                 {device ? (
-                                                    <span className="text-[9px] font-medium tracking-wider uppercase flex items-center gap-1 leading-none opacity-90">
+                                                    <span className="text-[8px] font-medium tracking-wider uppercase flex items-center gap-1 leading-none opacity-90">
                                                         BTN
                                                         {battery !== undefined && (
                                                             <span className={isLowBattery ? "text-red-400 font-bold" : "opacity-75"}>
@@ -235,7 +251,7 @@ export default function SystemViewPage() {
                                                         )}
                                                     </span>
                                                 ) : (
-                                                    <span className="text-[9px] font-medium tracking-wider uppercase text-orange-200 leading-none opacity-90">
+                                                    <span className="text-[8px] font-medium tracking-wider uppercase text-orange-200 leading-none opacity-90">
                                                         NO BTN
                                                     </span>
                                                 )}
