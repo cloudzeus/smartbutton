@@ -145,6 +145,7 @@ async function triggerAlertSequence(originExtension: string, originName: string)
         where: { isActive: true }
     });
     const announcementName = settings?.smartButtonAnnouncement || 'alert';
+    const dialPermission = settings?.outboundPermissionExtension || undefined;
 
     // Call each recipient in order
 
@@ -162,21 +163,23 @@ async function triggerAlertSequence(originExtension: string, originName: string)
             console.log(`   🔄 Attempt ${attempts}/${maxAttempts} for ${recipient.label}...`);
 
             try {
-                // Initiate bridge call
-                const callResponse = await fetch(`${baseUrl}/api/pbx/call/dial`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        caller: originExtension,
-                        callee: recipient.number,
-                        auto_answer: "no"
-                    })
-                });
+                // Config Check: Prevent calling self or using self as permission
+                if (recipient.number === originExtension) {
+                    console.warn(`⚠️ Skipping recipient ${recipient.label}: Cannot call the Smart Button's own extension (${originExtension}).`);
+                    continue;
+                }
+                if (dialPermission === originExtension) {
+                    console.error(`❌ Configuration Error: Outbound Permission Extension is set to the Smart Button's extension (${originExtension}). This will cause 503 Busy. Please use a registered phone extension.`);
+                    // We proceed but it likely fails
+                }
 
-                const callData = await callResponse.json();
+                // Initiate call via Play Prompt (Calls User -> Waits Answer -> Plays)
+                // This prevents the Origin Extension (Room Button) from ringing
+                // Pass dialPermission if configured (crucial for calling mobile numbers)
+                const result = await playAlert(recipient.number, baseUrl, announcementName, dialPermission);
 
-                if (callData.success) {
-                    const callId = callData.data?.call_id;
+                if (result && result.success && result.callId) {
+                    const callId = result.callId;
                     console.log(`   ✅ Call initiated: ${callId}`);
 
                     // Wait for answer (with timeout)
@@ -187,16 +190,13 @@ async function triggerAlertSequence(originExtension: string, originName: string)
                         recipientAnswered = true;
                         anyAnswered = true;
 
-                        // Play Announcement Message
-                        await playAlert(originExtension, baseUrl, announcementName);
-
                         console.log(`🎉 Alert sequence complete - connected to ${recipient.label}`);
                         break; // Stop retrying this recipient (and stop outer loop via check)
                     } else {
                         console.log(`   ⏭️ ${recipient.label} did not answer attempt ${attempts}.`);
                     }
                 } else {
-                    console.error(`   ❌ Failed to call ${recipient.label}:`, callData.error);
+                    console.error(`   ❌ Failed to call ${recipient.label}:`, result?.error);
                 }
 
             } catch (error) {
@@ -307,7 +307,7 @@ const ANNOUNCEMENT_NAME = 'alert'; // Change this to your desired PBX prompt fil
 /**
  * Play alert prompt to the extension
  */
-async function playAlert(extensionNumber: string, baseUrl: string, promptName: string = 'alert') {
+async function playAlert(extensionNumber: string, baseUrl: string, promptName: string = 'alert', dialPermission?: string) {
     try {
         const playResponse = await fetch(`${baseUrl}/api/pbx/prompt/play`, {
             method: 'POST',
@@ -315,7 +315,8 @@ async function playAlert(extensionNumber: string, baseUrl: string, promptName: s
             body: JSON.stringify({
                 extension: extensionNumber,
                 promptName: promptName, // Use the passed name
-                volume: 20 // Max volume
+                volume: 20, // Max volume
+                dialPermission: dialPermission // Pass permission extension
             })
         });
 
@@ -323,8 +324,10 @@ async function playAlert(extensionNumber: string, baseUrl: string, promptName: s
 
         if (playData.success) {
             console.log(`🔊 Alert prompt '${promptName}' played to extension ${extensionNumber}`);
+            return { success: true, callId: playData.data?.call_id };
         } else {
-            console.error(`❌ Failed to play alert:`, playData.error);
+            console.error(`❌ Failed to play alert to ${extensionNumber}: PBX Error ${playData.error} (Code: ${playData.errcode})`);
+            return { success: false, error: playData.error };
         }
 
     } catch (error) {

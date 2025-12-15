@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
         // }
 
         const body = await request.json();
-        const { pbxIp, pbxPort, clientId, clientSecret, websocketUrl, webhookSecret } = body;
+        const { pbxIp, pbxPort, clientId, clientSecret, websocketUrl, webhookSecret, smartButtonAnnouncement, outboundPermissionExtension } = body;
 
         // Upsert settings (update if exists, create if not)
         const settings = await prisma.pBXSettings.upsert({
@@ -58,6 +58,8 @@ export async function POST(request: NextRequest) {
                 clientSecret,
                 websocketUrl,
                 webhookSecret,
+                smartButtonAnnouncement: smartButtonAnnouncement || 'alert',
+                outboundPermissionExtension,
                 isActive: true,
             },
             create: {
@@ -68,6 +70,8 @@ export async function POST(request: NextRequest) {
                 clientSecret,
                 websocketUrl,
                 webhookSecret,
+                smartButtonAnnouncement: smartButtonAnnouncement || 'alert',
+                outboundPermissionExtension,
                 isActive: true,
             },
         });

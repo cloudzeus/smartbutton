@@ -19,7 +19,14 @@ export default function PBXSettingsPage() {
         websocketUrl: "",
         webhookSecret: "",
         demoExtensions: "100,101,102,103,104",
+        smartButtonAnnouncement: "alert",
+        outboundPermissionExtension: "",
     })
+
+    // Test Prompt State
+    const [testPromptNumber, setTestPromptNumber] = useState("")
+    const [testDialPermission, setTestDialPermission] = useState("")
+    const [isTestingPrompt, setIsTestingPrompt] = useState(false)
 
     const [isConnected, setIsConnected] = useState<boolean | null>(null)
     const [isTesting, setIsTesting] = useState(false)
@@ -51,6 +58,8 @@ export default function PBXSettingsPage() {
                     websocketUrl: data.settings.websocketUrl || "",
                     webhookSecret: data.settings.webhookSecret || "",
                     demoExtensions: "100,101,102,103,104",
+                    smartButtonAnnouncement: data.settings.smartButtonAnnouncement || "alert",
+                    outboundPermissionExtension: data.settings.outboundPermissionExtension || "",
                 })
             }
         } catch (error) {
@@ -106,6 +115,8 @@ export default function PBXSettingsPage() {
                     clientSecret: settings.clientSecret,
                     websocketUrl: settings.websocketUrl,
                     webhookSecret: settings.webhookSecret,
+                    smartButtonAnnouncement: settings.smartButtonAnnouncement,
+                    outboundPermissionExtension: settings.outboundPermissionExtension,
                 }),
             })
 
@@ -324,36 +335,107 @@ export default function PBXSettingsPage() {
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Phone className="h-5 w-5" />
-                        Audio Prompts
+                        Alert Call Configuration
                     </CardTitle>
                     <CardDescription>
-                        Custom audio files played during calls
+                        Configure how the PBX initiates alert calls (prompts and permissions)
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="space-y-2">
-                        <Label>Alert Sound (alert.mp3)</Label>
+                        <Label htmlFor="announcement">Prompt Filename (on PBX)</Label>
+                        <div className="flex gap-2">
+                            <Input
+                                id="announcement"
+                                value={settings.smartButtonAnnouncement}
+                                onChange={(e) => setSettings({ ...settings, smartButtonAnnouncement: e.target.value })}
+                                placeholder="alert"
+                            />
+                        </div>
                         <p className="text-xs text-muted-foreground">
-                            This audio file is played automatically when a call is answered. The file is served from the public folder.
+                            The unique filename of the Custom Prompt uploaded to your Yeastar PBX (without .wav/.mp3 extension).
                         </p>
                     </div>
 
-                    <div className="rounded-lg bg-muted p-4 space-y-2">
-                        <p className="text-sm font-semibold">✅ Automatic Playback Enabled</p>
-                        <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                            <li>alert.mp3 is located in the /public folder</li>
-                            <li>When a call is answered, the alert plays automatically to the caller</li>
-                            <li>After the alert, a TTS announcement plays with the caller's number</li>
-                            <li>No upload needed - the audio is served directly from this server</li>
-                        </ol>
+                    <div className="space-y-2">
+                        <Label htmlFor="outboundExt">Outbound Permission Extension</Label>
+                        <div className="flex gap-2">
+                            <Input
+                                id="outboundExt"
+                                value={settings.outboundPermissionExtension}
+                                onChange={(e) => setSettings({ ...settings, outboundPermissionExtension: e.target.value })}
+                                placeholder="e.g. 1000"
+                            />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            The extension number used to authorize outbound calls (e.g. to mobile numbers). Leave empty if only calling internal extensions.
+                        </p>
                     </div>
 
-                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
-                        <Badge variant="info">ℹ️</Badge>
-                        <p>
-                            To change the alert sound, replace /public/alert.mp3 with your own audio file (keep the same filename).
-                            Supported formats: MP3, WAV. Recommended: 8kHz-16kHz sample rate for telephony.
-                        </p>
+                    <div className="rounded-lg bg-muted p-4 space-y-4">
+                        <div className="space-y-1">
+                            <p className="text-sm font-semibold">Test Audio Prompt</p>
+                            <p className="text-xs text-muted-foreground">
+                                Enter a number to receive a call and hear the configured prompt.
+                            </p>
+                        </div>
+
+                        <div className="flex gap-2 items-end">
+                            <div className="space-y-1 flex-1">
+                                <Label htmlFor="testNumber" className="text-xs">Target Number / Extension</Label>
+                                <Input
+                                    id="testNumber"
+                                    value={testPromptNumber}
+                                    onChange={(e) => setTestPromptNumber(e.target.value)}
+                                    placeholder="e.g. 1000 or Mobile Number"
+                                    className="h-9"
+                                />
+                            </div>
+                            <div className="space-y-1 w-32">
+                                <Label htmlFor="dialPermission" className="text-xs">Permission Ext.</Label>
+                                <Input
+                                    id="dialPermission"
+                                    value={testDialPermission || settings.outboundPermissionExtension}
+                                    onChange={(e) => setTestDialPermission(e.target.value)}
+                                    placeholder="Optional"
+                                    className="h-9"
+                                />
+                            </div>
+                            <Button
+                                onClick={async () => {
+                                    if (!testPromptNumber) return;
+                                    setIsTestingPrompt(true);
+                                    try {
+                                        const response = await fetch("/api/pbx/prompt/play", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({
+                                                extension: testPromptNumber,
+                                                promptName: settings.smartButtonAnnouncement,
+                                                autoAnswer: "no",
+                                                dialPermission: testDialPermission || settings.outboundPermissionExtension || undefined
+                                            }),
+                                        });
+                                        const data = await response.json();
+                                        if (data.success) {
+                                            alert(`Call initiated!\nCall ID: ${data.data?.call_id}\n\nPlease answer the phone to hear the prompt.`);
+                                        } else {
+                                            alert("Failed: " + (data.error || JSON.stringify(data)));
+                                        }
+                                    } catch (e) {
+                                        alert("Error: " + e);
+                                    } finally {
+                                        setIsTestingPrompt(false);
+                                    }
+                                }}
+                                disabled={isTestingPrompt || !testPromptNumber}
+                                variant="secondary"
+                                size="sm"
+                                className="h-9"
+                            >
+                                {isTestingPrompt ? <Loader2 className="h-3 w-3 animate-spin" /> : "Test Playback"}
+                            </Button>
+                        </div>
                     </div>
                 </CardContent>
             </Card>

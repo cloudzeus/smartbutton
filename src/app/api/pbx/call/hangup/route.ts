@@ -6,108 +6,73 @@ import { getAccessToken, getSettings } from '@/lib/yeastar-api';
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { callId, extension } = body;
+        const { extensionId } = body;
 
-        if (!callId && !extension) {
+        if (!extensionId) {
             return NextResponse.json(
-                { success: false, error: 'Call ID or Extension is required' },
+                { success: false, error: 'Extension ID is required' },
                 { status: 400 }
             );
         }
 
-        const settings = await getSettings();
-        const token = await getAccessToken('api');
+        console.log(`🛑 Terminating call for extension ${extensionId}...`);
 
-        // P-Series Endpoint: /extension/hangup (or /call/hangup)
-        // https://help.yeastar.com/en/p-series-cloud-edition/developer-guide/hangup.html
-        // Prioritize /call/hangup as it uses call_id to terminate the session
-        const endpoints = ['/call/hangup', '/extension/hangup'];
-        let lastError = null;
+        let callId = null;
 
-        for (const endpoint of endpoints) {
-            const url = `https://${settings.pbxIp}:${settings.pbxPort}/openapi/v1.0${endpoint}?access_token=${encodeURIComponent(token)}`;
+        // 1. Find active call for this extension
+        const activeCall = await prisma.call.findFirst({
+            where: {
+                extensionId: extensionId,
+                status: { in: ['ringing', 'calling', 'connected', 'incall'] }
+            },
+            orderBy: { startTime: 'desc' }
+        });
 
-            console.log(`📞 Hanging up call (ID: ${callId}, Ext: ${extension}) via ${endpoint}...`);
-
-            const payload: any = {};
-            if (callId) payload.call_id = callId;
-            if (extension) payload.extension = extension;
-
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'OpenAPI'
-                    },
-                    body: JSON.stringify(payload),
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    lastError = new Error(`PBX status ${response.status}: ${errorText}`);
-                    continue;
-                }
-
-                const data = await response.json();
-
-                if (data.errcode === 0) {
-                    // Manual Cleanup (Garbage Collection)
-                    // Reset extension status to online/idle immediately
-                    if (extension) {
-                        prisma.extension.update({
-                            where: { extensionId: extension },
-                            data: { status: 'online', lastSeen: new Date() }
-                        }).catch(() => { });
-                    }
-                    if (callId) {
-                        prisma.call.updateMany({
-                            where: { callId: callId },
-                            data: { status: 'terminated', endTime: new Date() }
-                        }).catch(() => { });
-
-                        // Try to find extension from call if not provided
-                        if (!extension) {
-                            prisma.call.findFirst({ where: { callId }, select: { extensionId: true } })
-                                .then(c => {
-                                    if (c?.extensionId) {
-                                        prisma.extension.update({
-                                            where: { id: c.extensionId },
-                                            data: { status: 'online' }
-                                        }).catch(() => { });
-                                    }
-                                });
-                        }
-                    }
-
-                    return NextResponse.json({ success: true, data });
-                }
-
-                if (data.errcode === 10001) { // Not Existed
-                    // Cleanup anyway, as it's gone
-                    if (extension) {
-                        prisma.extension.update({
-                            where: { extensionId: extension },
-                            data: { status: 'online' }
-                        }).catch(() => { });
-                    }
-                    continue; // Try next endpoint just in case
-                }
-
-                throw new Error(`PBX API Error ${data.errcode}: ${data.errmsg}`);
-
-            } catch (error: any) {
-                console.warn(`Failed attempt on ${endpoint}:`, error.message);
-                lastError = error;
-            }
+        if (activeCall) {
+            callId = activeCall.callId;
         }
 
-        throw lastError || new Error('Failed to hang up call via any endpoint');
+        // 2. If call ID found, send Hangup to PBX
+        if (callId) {
+            try {
+                const settings = await getSettings();
+                const token = await getAccessToken('api');
+                const url = `https://${settings.pbxIp}:${settings.pbxPort}/openapi/v1.0/call/hangup?access_token=${encodeURIComponent(token)}`;
 
-    } catch (error: any) {
-        console.error('Hangup Error:', error);
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ call_id: callId })
+                });
+
+                const data = await response.json();
+                console.log('PBX Hangup Response:', data);
+
+                // Mark call ended in DB
+                await prisma.call.update({
+                    where: { id: activeCall?.id },
+                    data: { status: 'ended', endTime: new Date() }
+                });
+
+            } catch (e) {
+                console.error('Failed to hangup on PBX:', e);
+            }
+        } else {
+            console.log('No active call record found in DB, just resetting status.');
+        }
+
+        // 3. Always reset extension status to 'online' (Force Reset)
+        await prisma.extension.update({
+            where: { extensionId: extensionId },
+            data: { status: 'online' }
+        });
+
+        return NextResponse.json({ success: true, message: 'Call terminated and status reset' });
+
+    } catch (error) {
+        console.error('Error in hangup route:', error);
         return NextResponse.json(
-            { success: false, error: error.message || 'Failed to hang up call' },
+            { success: false, error: 'Internal server error' },
             { status: 500 }
         );
     }

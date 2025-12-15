@@ -137,6 +137,7 @@ model PBXSettings {
   websocketUrl  String?
   webhookSecret String?
   smartButtonAnnouncement String @default("alert") // Filename of the audio prompt on PBX
+  outboundPermissionExtension String? // Extension to use for outbound call permissions
   isActive      Boolean  @default(true)
 
   // Token Storage for Persistence

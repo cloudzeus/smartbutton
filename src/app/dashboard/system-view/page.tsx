@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, Search, Phone, Wifi, WifiOff, Battery, BatteryLow, AlertTriangle, Building2, Server } from "lucide-react"
+import { RefreshCw, Search, Phone, Wifi, WifiOff, Battery, BatteryLow, AlertTriangle, Building2, Server, PhoneOff, Loader2 } from "lucide-react"
 import gsap from "gsap"
 
 interface SystemViewRoom {
@@ -29,9 +29,9 @@ export default function SystemViewPage() {
     const [searchTerm, setSearchTerm] = useState("")
 
     useEffect(() => {
-        loadData()
+        loadRooms()
         // Auto refresh every 3 seconds for real-time status (Ringing)
-        const interval = setInterval(loadData, 3000)
+        const interval = setInterval(loadRooms, 3000)
         return () => clearInterval(interval)
     }, [])
 
@@ -104,7 +104,7 @@ export default function SystemViewPage() {
         })
     }, [rooms]) // Re-run when rooms/status update
 
-    const loadData = async () => {
+    const loadRooms = async () => {
         try {
             const response = await fetch('/api/system-view')
             const data = await response.json()
@@ -122,7 +122,27 @@ export default function SystemViewPage() {
     // Refresh Logic
     const handleRefresh = () => {
         setIsRefreshing(true)
-        loadData()
+        loadRooms()
+    }
+
+    const handleTerminate = async (e: React.MouseEvent, extensionId: string) => {
+        e.stopPropagation()
+        e.preventDefault()
+
+        // Optimistic update locally? No, wait for refresh.
+        // Actually, let's just fire and forget then refresh.
+
+        try {
+            await fetch('/api/pbx/call/hangup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ extensionId })
+            })
+            // Refresh explicitly
+            loadRooms()
+        } catch (error) {
+            console.error('Failed to terminate call:', error)
+        }
     }
 
     const filteredRooms = rooms.filter(room =>
@@ -299,6 +319,21 @@ export default function SystemViewPage() {
                                                 {room.name || '-'}
                                             </div>
                                         </div>
+
+                                        {/* Terminate Action (Only active statuses) */}
+                                        {['ringing', 'incall', 'connected', 'dialing', 'calling', 'busy'].includes(status) && (
+                                            <div className="absolute top-1 right-1">
+                                                <Button
+                                                    variant="destructive"
+                                                    size="icon"
+                                                    className="h-5 w-5 rounded-full shadow-md hover:bg-red-600 border border-white/20"
+                                                    onClick={(e) => handleTerminate(e, room.extensionId)}
+                                                    title="Terminate/Reset Status"
+                                                >
+                                                    <PhoneOff className="h-3 w-3" />
+                                                </Button>
+                                            </div>
+                                        )}
 
                                         {/* Footer Badges */}
                                         <div className="flex items-end gap-1">
