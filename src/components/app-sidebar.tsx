@@ -16,7 +16,9 @@ import {
     Phone,
     LayoutDashboard,
     FileText,
-    History
+    History,
+    Smartphone,
+    Server
 } from "lucide-react"
 
 import {
@@ -45,82 +47,87 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { usePermissions } from "@/hooks/use-permissions"
 
-const menuData = [
-    {
-        title: "Dashboard",
-        icon: LayoutDashboard,
-        items: [
-            {
-                title: "Overview",
-                url: "/dashboard",
-                icon: Activity,
-            },
-        ],
-    },
-    {
-        title: "PBX Monitor",
-        icon: Phone,
-        items: [
-            {
-                title: "PBX Status",
-                url: "/dashboard/pbx",
-                icon: Activity,
-            },
-            {
-                title: "PBX Logs",
-                url: "/dashboard/pbx/logs",
-                icon: FileText,
-            },
-            {
-                title: "Extensions",
-                url: "/dashboard/extensions",
-                icon: Phone,
-            },
-            {
-                title: "Call History",
-                url: "/dashboard/pbx/history",
-                icon: History,
-            },
-        ],
-    },
-    {
-        title: "Users & Authentication",
-        icon: Shield,
-        items: [
-            {
-                title: "User Management",
-                url: "/dashboard/users",
-                icon: Users,
-            },
-            {
-                title: "Role Management",
-                url: "/dashboard/roles",
-                icon: Shield,
-            },
-            {
-                title: "Access Management",
-                url: "/dashboard/access",
-                icon: Lock,
-            },
-        ],
-    },
-    {
-        title: "Settings",
-        icon: Settings,
-        items: [
-            {
-                title: "PBX Settings",
-                url: "/dashboard/settings/pbx",
-                icon: Phone,
-            },
-        ],
-    },
-]
+// Icon mapping
+const iconMap: Record<string, any> = {
+    LayoutDashboard,
+    Activity,
+    Phone,
+    FileText,
+    History,
+    Shield,
+    Users,
+    Lock,
+    Settings,
+    Smartphone,
+    Server
+}
+
+// Fallback menu if API fails
+function getDefaultMenu() {
+    return [
+        {
+            title: "Dashboard",
+            icon: LayoutDashboard,
+            items: [{ title: "Overview", url: "/dashboard", icon: Activity }]
+        },
+        {
+            title: "PBX Monitor",
+            icon: Phone,
+            items: [
+                { title: "PBX Status", url: "/dashboard/pbx", icon: Activity },
+                { title: "Extensions", url: "/dashboard/extensions", icon: Phone }
+            ]
+        }
+    ]
+}
 
 export function AppSidebar() {
     const pathname = usePathname()
     const { data: session } = useSession()
     const { canViewPage, isLoading } = usePermissions()
+    const [menuData, setMenuData] = React.useState<any[]>([])
+    const [isLoadingMenu, setIsLoadingMenu] = React.useState(true)
+    const [isMounted, setIsMounted] = React.useState(false)
+
+    // Prevent hydration mismatch
+    React.useEffect(() => {
+        setIsMounted(true)
+    }, [])
+
+    // Fetch menu data from database
+    React.useEffect(() => {
+        async function loadMenuData() {
+            try {
+                const response = await fetch('/api/menu')
+                const data = await response.json()
+
+                if (data.success && data.menuGroups) {
+                    // Transform database menu structure to component format
+                    const transformedMenu = data.menuGroups.map((group: any) => ({
+                        id: group.id, // Add ID for unique keys
+                        title: group.label,
+                        icon: iconMap[group.icon] || Settings,
+                        items: group.menuItems.map((item: any) => ({
+                            title: item.label,
+                            url: item.path,
+                            icon: iconMap[item.icon] || Activity
+                        }))
+                    }))
+                    setMenuData(transformedMenu)
+                }
+            } catch (error) {
+                console.error('Error loading menu:', error)
+                // Fallback to hardcoded menu if API fails
+                setMenuData(getDefaultMenu())
+            } finally {
+                setIsLoadingMenu(false)
+            }
+        }
+
+        if (isMounted) {
+            loadMenuData()
+        }
+    }, [isMounted])
 
     const getInitials = (name?: string | null) => {
         if (!name) return "U"
@@ -133,10 +140,32 @@ export function AppSidebar() {
     }
 
     // Filter menu items based on permissions
-    const filteredMenuData = menuData.map(group => ({
+    const filteredMenuData = menuData.map((group: any) => ({
         ...group,
-        items: group.items.filter(item => canViewPage(item.url))
-    })).filter(group => group.items.length > 0)
+        items: group.items.filter((item: any) => canViewPage(item.url))
+    })).filter((group: any) => group.items.length > 0)
+
+    // Don't render menu until mounted to prevent hydration mismatch
+    if (!isMounted) {
+        return (
+            <Sidebar>
+                <SidebarHeader className="border-b border-sidebar-border p-4">
+                    <Link href="/dashboard" className="flex items-center gap-2">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-chart-2">
+                            <Phone className="h-5 w-5 text-primary-foreground" />
+                        </div>
+                        <div className="flex flex-col">
+                            <span className="text-sm font-semibold">Hotel Smart Button</span>
+                            <span className="text-xs text-muted-foreground">PBX Dashboard</span>
+                        </div>
+                    </Link>
+                </SidebarHeader>
+                <SidebarContent>
+                    <div className="p-4 text-center text-muted-foreground">Loading...</div>
+                </SidebarContent>
+            </Sidebar>
+        )
+    }
 
     return (
         <Sidebar>
@@ -154,7 +183,7 @@ export function AppSidebar() {
 
             <SidebarContent>
                 {!isLoading && filteredMenuData.map((group) => (
-                    <SidebarGroup key={group.title}>
+                    <SidebarGroup key={group.id || group.title}>
                         <SidebarGroupLabel className="flex items-center gap-2 uppercase tracking-wider text-xs font-semibold">
                             <group.icon className="h-3.5 w-3.5" />
                             {group.title}
@@ -162,7 +191,7 @@ export function AppSidebar() {
                         <SidebarGroupContent>
                             <SidebarMenu>
                                 {group.items.map((item) => (
-                                    <SidebarMenuItem key={item.title}>
+                                    <SidebarMenuItem key={item.url}>
                                         <SidebarMenuButton
                                             asChild
                                             isActive={pathname === item.url}

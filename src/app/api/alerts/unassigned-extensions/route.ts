@@ -19,12 +19,16 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        // Get all extensions
+        // Get all ROOM extensions (not ADMIN or OTHER)
         const allExtensions = await prisma.extension.findMany({
+            where: {
+                extensionType: 'ROOM' // Only check room extensions
+            },
             select: {
                 id: true,
                 extensionId: true,
-                name: true
+                name: true,
+                roomNumber: true
             },
             orderBy: { extensionId: 'asc' }
         });
@@ -43,12 +47,12 @@ export async function GET(request: NextRequest) {
             devicesWithExtensions.map(d => d.assignedExtensionId).filter(Boolean)
         );
 
-        // Find unassigned extensions
+        // Find unassigned ROOM extensions
         const unassignedExtensions = allExtensions.filter(
             ext => !assignedExtensionIds.has(ext.id)
         );
 
-        console.log(`📊 Extensions: ${allExtensions.length} total, ${unassignedExtensions.length} unassigned`);
+        console.log(`📊 Room Extensions: ${allExtensions.length} total, ${unassignedExtensions.length} without smart buttons`);
 
         // Send email if requested
         let emailSent = false;

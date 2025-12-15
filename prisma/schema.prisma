@@ -227,6 +227,10 @@ model Extension {
   status        String   @default("offline") // online, offline, busy, ringing, etc.
   isSynced      Boolean  @default(false)
   
+  // Extension Type & Room Info
+  extensionType ExtensionType @default(OTHER) // ROOM, ADMIN, OTHER
+  roomNumber    String?  // Room number if type is ROOM (e.g., "101", "205")
+  
   // SIP Configuration
   sipServer     String?
   sipUser       String?
@@ -243,6 +247,15 @@ model Extension {
   
   callEvents    CallEvent[]
   milesightDevices MilesightDevice[] // Devices assigned to this extension
+  
+  @@index([extensionType])
+  @@index([roomNumber])
+}
+
+enum ExtensionType {
+  ROOM   // Hotel room extension
+  ADMIN  // Administrative/staff extension
+  OTHER  // Other type of extension
 }
 
 // Call model to track individual calls

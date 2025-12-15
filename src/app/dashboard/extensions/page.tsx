@@ -23,8 +23,15 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog"
 import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+import {
     Plus, RefreshCcw, RefreshCw, Search, Trash2, Edit, Phone, Wifi, WifiOff, LayoutGrid, List,
-    Copy, CheckCircle, PhoneOff
+    Copy, CheckCircle, PhoneOff, Building2, UserCog, HelpCircle
 } from 'lucide-react'
 import { Checkbox } from "@/components/ui/checkbox"
 import { useSession } from "next-auth/react"
@@ -333,6 +340,8 @@ export default function ExtensionsPage() {
         sipServer: "",
         sipUser: "",
         sipPassword: "",
+        extensionType: "OTHER" as 'ROOM' | 'ADMIN' | 'OTHER',
+        roomNumber: "",
     })
     const [syncToPbx, setSyncToPbx] = useState(false)
 
@@ -569,6 +578,8 @@ export default function ExtensionsPage() {
             sipServer: extension.sipServer || "",
             sipUser: extension.sipUser || "",
             sipPassword: extension.sipPassword || "",
+            extensionType: (extension as any).extensionType || "OTHER",
+            roomNumber: (extension as any).roomNumber || "",
         })
         setIsDialogOpen(true)
     }
@@ -602,6 +613,8 @@ export default function ExtensionsPage() {
             sipServer: "",
             sipUser: "",
             sipPassword: "",
+            extensionType: "OTHER",
+            roomNumber: "",
         })
         setEditingExtension(null)
     }
@@ -830,6 +843,67 @@ export default function ExtensionsPage() {
                                         }
                                         placeholder="Reception"
                                     />
+                                </div>
+                            </div>
+
+                            {/* Extension Type & Room Number */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="extensionType">Extension Type</Label>
+                                    <Select
+                                        value={formData.extensionType}
+                                        onValueChange={(value: 'ROOM' | 'ADMIN' | 'OTHER') =>
+                                            setFormData({ ...formData, extensionType: value, ...(value !== 'ROOM' && { roomNumber: '' }) })
+                                        }
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="ROOM">
+                                                <div className="flex items-center gap-2">
+                                                    <Building2 className="h-4 w-4" />
+                                                    Room (needs smart button)
+                                                </div>
+                                            </SelectItem>
+                                            <SelectItem value="ADMIN">
+                                                <div className="flex items-center gap-2">
+                                                    <UserCog className="h-4 w-4" />
+                                                    Admin/Staff
+                                                </div>
+                                            </SelectItem>
+                                            <SelectItem value="OTHER">
+                                                <div className="flex items-center gap-2">
+                                                    <HelpCircle className="h-4 w-4" />
+                                                    Other
+                                                </div>
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-xs text-muted-foreground">
+                                        {formData.extensionType === 'ROOM' && 'Guest rooms need smart button assignment'}
+                                        {formData.extensionType === 'ADMIN' && 'Staff extensions (no smart button needed)'}
+                                        {formData.extensionType === 'OTHER' && 'Conference rooms, restaurant, etc.'}
+                                    </p>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="roomNumber">
+                                        Room Number {formData.extensionType === 'ROOM' && '*'}
+                                    </Label>
+                                    <Input
+                                        id="roomNumber"
+                                        value={formData.roomNumber}
+                                        onChange={(e) =>
+                                            setFormData({ ...formData, roomNumber: e.target.value })
+                                        }
+                                        placeholder={formData.extensionType === 'ROOM' ? 'e.g., 101, Suite 205' : 'N/A'}
+                                        disabled={formData.extensionType !== 'ROOM'}
+                                    />
+                                    {formData.extensionType === 'ROOM' && (
+                                        <p className="text-xs text-muted-foreground">
+                                            Room number for guest identification
+                                        </p>
+                                    )}
                                 </div>
                             </div>
 

@@ -18,7 +18,9 @@ export async function PUT(
         }
 
         const body = await request.json();
-        const { name, sipServer, sipUser, sipPassword } = body;
+        const { name, sipServer, sipUser, sipPassword, extensionType, roomNumber } = body;
+
+        console.log(`📝 Updating extension ${params.id}:`, { extensionType, roomNumber, name });
 
         const extension = await prisma.extension.update({
             where: { id: params.id },
@@ -27,14 +29,22 @@ export async function PUT(
                 sipServer,
                 sipUser,
                 sipPassword,
+                ...(extensionType && { extensionType }),
+                // Convert empty string to null for roomNumber
+                roomNumber: roomNumber === '' ? null : roomNumber
             },
         });
 
+        console.log('✅ Extension updated successfully');
         return NextResponse.json({ success: true, extension });
-    } catch (error) {
-        console.error('Error updating extension:', error);
+    } catch (error: any) {
+        console.error('❌ Error updating extension:', error);
+        // Log detailed error for debugging
+        if (error.code) console.error('Prisma Error Code:', error.code);
+        if (error.meta) console.error('Prisma Error Meta:', error.meta);
+
         return NextResponse.json(
-            { success: false, error: 'Failed to update extension' },
+            { success: false, error: 'Failed to update extension: ' + (error.message || 'Unknown error') },
             { status: 500 }
         );
     }
