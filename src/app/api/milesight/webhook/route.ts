@@ -28,48 +28,77 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const body = JSON.parse(rawBody);
+        let body = JSON.parse(rawBody);
+
+        // Handle array payload (Milesight often sends array of events)
+        if (Array.isArray(body)) {
+            body = body[0]; // Process first event for now
+        }
 
         console.log('📩 Milesight webhook received:', JSON.stringify(body, null, 2));
 
-        // Extract button press information
-        const {
-            deviceId,
-            deviceName,
-            event,
-            timestamp,
-            data
-        } = body;
+        // Extract event info from new structure
+        // Structure: { eventType: "DEVICE_DATA", data: { deviceProfile: { sn, ... }, tslId: "button_event", payload: { status: "1" } } }
+        const eventType = body.eventType;
+        const deviceData = body.data || {};
+        const profile = deviceData.deviceProfile || {};
+
+        const sn = profile.sn; // Serial Number is the reliable identifier
+        const tslId = deviceData.tslId;
+        const payload = deviceData.payload || {};
+        const isButtonPressed = tslId === 'button_event' && String(payload.status) === '1';
 
         // Validate required fields
-        if (!deviceId || !event) {
+        if (!sn) {
             return NextResponse.json(
-                { success: false, error: 'Missing required fields: deviceId, event' },
+                { success: false, error: 'Missing device SN' },
                 { status: 400 }
             );
         }
 
         // Check if this is a button press event
-        if (event !== 'button_press' && event !== 'button_pressed' && event !== 'alarm') {
-            console.log(`ℹ️ Ignoring non-button event: ${event}`);
+        if (!isButtonPressed) {
+            console.log(`ℹ️ Ignoring non-button event or button release: ${tslId} status=${payload.status}`);
             return NextResponse.json({
                 success: true,
                 message: 'Event received but not a button press'
             });
         }
 
-        console.log(`🔔 BUTTON PRESSED! Device: ${deviceId} (${deviceName || 'Unknown'})`);
+        console.log(`🔔 BUTTON PRESSED! SN: ${sn}`);
 
-        // Trigger alert sequence (runs in background)
-        triggerAlertSequence(deviceId, deviceName, data).catch(err => {
+        // Find device and assigned extension in DB
+        // We match by Serial Number because Webhook deviceId might differ from OpenAPI deviceId
+        const device = await prisma.milesightDevice.findFirst({
+            where: { serialNumber: sn },
+            include: { assignedExtension: true }
+        });
+
+        if (!device) {
+            console.warn(`⚠️ Device with SN ${sn} not found in database. Please run Sync first.`);
+            return NextResponse.json({ success: false, error: 'Device not found' }, { status: 404 });
+        }
+
+        if (!device.assignedExtension) {
+            console.warn(`⚠️ Device ${device.deviceName} (${sn}) has no assigned extension.`);
+            return NextResponse.json({ success: true, message: 'Device has no assigned extension' });
+        }
+
+        const extensionNumber = device.assignedExtension.extensionId;
+        const deviceName = device.assignedExtension.name || device.deviceName;
+
+        console.log(`🔔 Button Pressed in ${deviceName} (Ext: ${extensionNumber})`);
+        console.log(`📞 Starting Alert Sequence to configured recipients...`);
+
+        // Trigger Alert Sequence (Call configured recipients)
+        triggerAlertSequence(extensionNumber, deviceName).catch(err => {
             console.error('❌ Alert sequence error:', err);
         });
 
-        // Return immediately - don't wait for calls to complete
         return NextResponse.json({
             success: true,
-            message: 'Alert triggered successfully',
-            deviceId,
+            message: `Alert triggered from ${extensionNumber}`,
+            sn,
             timestamp: new Date().toISOString()
         });
 
@@ -84,11 +113,13 @@ export async function POST(request: NextRequest) {
 
 /**
  * Trigger alert call sequence
- * Calls recipients in order until someone answers
- * Runs SERVER-SIDE - no browser required
+ * Calls recipients defined in PBX Settings (prisma.alertRecipient)
  */
-async function triggerAlertSequence(deviceId: string, deviceName: string | undefined, data: any) {
-    console.log(`🚨 Starting alert sequence for device: ${deviceId}`);
+async function triggerAlertSequence(originExtension: string, originName: string) {
+    console.log(`🚨 Starting alert sequence from: ${originName} (${originExtension})`);
+
+    // Update extension status to RINGING (triggers frontend alert)
+    await updateExtensionStatus(originExtension, 'ringing');
 
     // Get all active alert recipients in order
     const recipients = await prisma.alertRecipient.findMany({
@@ -97,7 +128,8 @@ async function triggerAlertSequence(deviceId: string, deviceName: string | undef
     });
 
     if (recipients.length === 0) {
-        console.warn('⚠️ No alert recipients configured!');
+        console.warn('⚠️ No alert recipients configured in PBX Settings!');
+        await updateExtensionStatus(originExtension, 'online'); // Reset status
         return;
     }
 
@@ -106,56 +138,97 @@ async function triggerAlertSequence(deviceId: string, deviceName: string | undef
     // Get base URL for API calls
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 
+    let anyAnswered = false;
+
+    // Fetch Announcement Name from PBX Settings
+    const settings = await prisma.pBXSettings.findFirst({
+        where: { isActive: true }
+    });
+    const announcementName = settings?.smartButtonAnnouncement || 'alert';
+
     // Call each recipient in order
+
     for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i];
         console.log(`📞 Calling recipient #${i + 1}: ${recipient.label} (${recipient.number})`);
 
-        try {
-            // Initiate call
-            const callResponse = await fetch(`${baseUrl}/api/pbx/call/dial`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    caller: recipient.number,
-                    callee: recipient.number,
-                    auto_answer: recipient.type === 'EXTENSION' ? 'yes' : 'no'
-                })
-            });
+        // Retry logic: Try 3 times
+        const maxAttempts = 3;
+        let attempts = 0;
+        let recipientAnswered = false;
 
-            const callData = await callResponse.json();
+        while (attempts < maxAttempts && !recipientAnswered) {
+            attempts++;
+            console.log(`   🔄 Attempt ${attempts}/${maxAttempts} for ${recipient.label}...`);
 
-            if (callData.success) {
-                const callId = callData.data?.call_id;
-                console.log(`✅ Call initiated to ${recipient.label}: ${callId}`);
+            try {
+                // Initiate bridge call
+                const callResponse = await fetch(`${baseUrl}/api/pbx/call/dial`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        caller: originExtension,
+                        callee: recipient.number,
+                        auto_answer: "no"
+                    })
+                });
 
-                // Wait for answer (with timeout)
-                const answered = await waitForAnswer(callId, recipient.number, 30000, baseUrl);
+                const callData = await callResponse.json();
 
-                if (answered) {
-                    console.log(`✅ ${recipient.label} ANSWERED! Playing alert...`);
+                if (callData.success) {
+                    const callId = callData.data?.call_id;
+                    console.log(`   ✅ Call initiated: ${callId}`);
 
-                    // Play alert.mp3
-                    await playAlert(recipient.number, baseUrl);
+                    // Wait for answer (with timeout)
+                    const answered = await waitForAnswer(callId, recipient.number, 30000, baseUrl);
 
-                    console.log(`🎉 Alert sequence complete - answered by ${recipient.label}`);
-                    return; // Stop calling once someone answers
+                    if (answered) {
+                        console.log(`   ✅ ${recipient.label} ANSWERED!`);
+                        recipientAnswered = true;
+                        anyAnswered = true;
+
+                        // Play Announcement Message
+                        await playAlert(originExtension, baseUrl, announcementName);
+
+                        console.log(`🎉 Alert sequence complete - connected to ${recipient.label}`);
+                        break; // Stop retrying this recipient (and stop outer loop via check)
+                    } else {
+                        console.log(`   ⏭️ ${recipient.label} did not answer attempt ${attempts}.`);
+                    }
                 } else {
-                    console.log(`⏭️ ${recipient.label} did not answer, trying next recipient...`);
+                    console.error(`   ❌ Failed to call ${recipient.label}:`, callData.error);
                 }
-            } else {
-                console.error(`❌ Failed to call ${recipient.label}:`, callData.error);
+
+            } catch (error) {
+                console.error(`   ❌ Error calling ${recipient.label}:`, error);
             }
 
-        } catch (error) {
-            console.error(`❌ Error calling ${recipient.label}:`, error);
+            // Delay between attempts if not answered
+            if (!recipientAnswered && attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
         }
 
-        // Small delay between calls
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        if (anyAnswered) break; // Stop calling other recipients if someone answered
     }
 
-    console.warn('⚠️ Alert sequence complete - NO ONE ANSWERED!');
+    if (!anyAnswered) {
+        console.warn('⚠️ Alert sequence complete - NO ONE ANSWERED!');
+    }
+
+    // Reset extension status to ONLINE after sequence
+    await updateExtensionStatus(originExtension, 'online');
+}
+
+async function updateExtensionStatus(extensionId: string, status: string) {
+    try {
+        await prisma.extension.update({
+            where: { extensionId },
+            data: { status }
+        });
+    } catch (e) {
+        console.error(`Failed to update extension ${extensionId} status to ${status}`, e);
+    }
 }
 
 /**
@@ -225,17 +298,23 @@ async function waitForExtensionAnswer(extensionNumber: string, timeout: number):
     return false; // Timeout
 }
 
+const ANNOUNCEMENT_NAME = 'alert'; // Change this to your desired PBX prompt filename
+
+// ... (inside triggerAlertSequence) use ANNOUNCEMENT_NAME instead of 'alert'
+// But wait, I can't put const inside replacement chunk easily if it's far away.
+// I will just update playAlert to accept the name.
+
 /**
- * Play alert.mp3 to the extension
+ * Play alert prompt to the extension
  */
-async function playAlert(extensionNumber: string, baseUrl: string) {
+async function playAlert(extensionNumber: string, baseUrl: string, promptName: string = 'alert') {
     try {
         const playResponse = await fetch(`${baseUrl}/api/pbx/prompt/play`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 extension: extensionNumber,
-                promptName: 'alert',
+                promptName: promptName, // Use the passed name
                 volume: 20 // Max volume
             })
         });
@@ -243,7 +322,7 @@ async function playAlert(extensionNumber: string, baseUrl: string) {
         const playData = await playResponse.json();
 
         if (playData.success) {
-            console.log(`🔊 Alert played to extension ${extensionNumber}`);
+            console.log(`🔊 Alert prompt '${promptName}' played to extension ${extensionNumber}`);
         } else {
             console.error(`❌ Failed to play alert:`, playData.error);
         }

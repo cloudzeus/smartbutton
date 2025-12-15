@@ -28,13 +28,75 @@ export default function MilesightStatusPage() {
     const [isRefreshing, setIsRefreshing] = useState(false)
     const [recipientEmail, setRecipientEmail] = useState("")
     const [isSendingAlert, setIsSendingAlert] = useState(false)
+    const [emailRecipientId, setEmailRecipientId] = useState<string | null>(null)
+    const [isSavingEmail, setIsSavingEmail] = useState(false)
+    const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
 
     useEffect(() => {
         loadDevices()
+        loadRecipients()
         // Auto-refresh every 30 seconds
         const interval = setInterval(loadDevices, 30000)
         return () => clearInterval(interval)
     }, [])
+
+    const loadRecipients = async () => {
+        try {
+            const response = await fetch('/api/device-alert-recipients')
+            const data = await response.json()
+            if (data.success && data.recipients) {
+                // Find first email recipient
+                const emailRec = data.recipients.find((r: any) => r.type === 'EMAIL')
+                if (emailRec) {
+                    setRecipientEmail(emailRec.number)
+                    setEmailRecipientId(emailRec.id)
+                }
+            }
+        } catch (error) {
+            console.error('Error loading recipients:', error)
+        }
+    }
+
+    const handleSaveEmail = async () => {
+        if (!recipientEmail) return
+
+        setIsSavingEmail(true)
+        try {
+            const method = emailRecipientId ? 'PUT' : 'POST'
+            const body: any = {
+                number: recipientEmail,
+                label: 'Alert Email',
+                type: 'EMAIL',
+                notifyOnLowBattery: true,
+                notifyOnOffline: true
+            }
+
+            if (emailRecipientId) {
+                body.id = emailRecipientId
+            }
+
+            const response = await fetch('/api/device-alert-recipients', {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            })
+
+            const data = await response.json()
+            if (data.success) {
+                if (!emailRecipientId && data.recipient?.id) {
+                    setEmailRecipientId(data.recipient.id)
+                }
+                alert('Email saved successfully')
+            } else {
+                alert('Failed to save email: ' + data.error)
+            }
+        } catch (error) {
+            alert('Error saving email')
+            console.error(error)
+        } finally {
+            setIsSavingEmail(false)
+        }
+    }
 
     const loadDevices = async () => {
         try {
@@ -43,6 +105,7 @@ export default function MilesightStatusPage() {
 
             if (data.success) {
                 setDevices(data.devices)
+                setLastRefreshed(new Date())
             }
         } catch (error) {
             console.error('Error loading devices:', error)
@@ -243,9 +306,22 @@ export default function MilesightStatusPage() {
                             />
                         </div>
                         <Button
+                            onClick={handleSaveEmail}
+                            disabled={isSavingEmail || !recipientEmail}
+                            className="gap-2"
+                            variant="destructive"
+                        >
+                            {isSavingEmail ? (
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                            ) : (
+                                "Save"
+                            )}
+                        </Button>
+                        <Button
                             onClick={handleSendAlerts}
                             disabled={isSendingAlert || !recipientEmail}
                             className="gap-2"
+                            variant="outline"
                         >
                             {isSendingAlert ? (
                                 <>
@@ -255,7 +331,7 @@ export default function MilesightStatusPage() {
                             ) : (
                                 <>
                                     <AlertTriangle className="h-4 w-4" />
-                                    Send Alerts
+                                    Test Alert
                                 </>
                             )}
                         </Button>
@@ -274,7 +350,7 @@ export default function MilesightStatusPage() {
                 <CardHeader>
                     <CardTitle>All Devices</CardTitle>
                     <CardDescription>
-                        Last updated: {new Date().toLocaleTimeString()}
+                        Last updated: {lastRefreshed ? lastRefreshed.toLocaleTimeString() : 'Loading...'}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>

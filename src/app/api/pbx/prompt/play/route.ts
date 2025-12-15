@@ -16,19 +16,19 @@ export async function POST(request: NextRequest) {
         const settings = await getSettings();
         const token = await getAccessToken('api');
 
-        // Yeastar P550 endpoint for playing prompts to an extension
-        // Reference: /call/play_prompt
+        // Yeastar P550 OpenAPI v1.0 endpoint (Official Documentation)
+        // Endpoint: POST /openapi/v1.0/call/play_prompt?access_token=ACCESS_TOKEN
         const url = `https://${settings.pbxIp}:${settings.pbxPort}/openapi/v1.0/call/play_prompt?access_token=${encodeURIComponent(token)}`;
 
         const payload = {
-            number: extension,           // Extension number to play prompt to
-            prompts: [promptName],       // Array of prompt names (without file extension)
-            count: 1,                    // Play once
-            auto_answer: autoAnswer,     // Auto-answer if supported
-            volume: volume               // Volume 0-20
+            number: extension,           // The target number
+            prompts: [promptName],       // Array of prompt names
+            count: 1,                    // Frequency
+            auto_answer: autoAnswer,     // 'yes' or 'no'
+            volume: volume               // 0-20
         };
 
-        console.log(`🔊 Playing prompt "${promptName}" to extension ${extension}`);
+        console.log(`🔊 Playing prompt "${promptName}" to extension ${extension} via OpenAPI`);
 
         const response = await fetch(url, {
             method: 'POST',

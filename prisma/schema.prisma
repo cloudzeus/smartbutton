@@ -136,6 +136,7 @@ model PBXSettings {
   clientSecret  String?
   websocketUrl  String?
   webhookSecret String?
+  smartButtonAnnouncement String @default("alert") // Filename of the audio prompt on PBX
   isActive      Boolean  @default(true)
 
   // Token Storage for Persistence
@@ -168,6 +169,7 @@ model AlertRecipient {
 enum RecipientType {
   EXTENSION  // Internal PBX extension
   EXTERNAL   // External phone number
+  EMAIL      // Email Address
 }
 
 // Milesight Smart Button Devices

@@ -1,11 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { RefreshCw, Search, Phone, Wifi, WifiOff, Battery, BatteryLow, AlertTriangle, Building2, Server } from "lucide-react"
+import gsap from "gsap"
 
 interface SystemViewRoom {
     id: string
@@ -29,10 +30,79 @@ export default function SystemViewPage() {
 
     useEffect(() => {
         loadData()
-        // Auto refresh every 30 seconds
-        const interval = setInterval(loadData, 30000)
+        // Auto refresh every 3 seconds for real-time status (Ringing)
+        const interval = setInterval(loadData, 3000)
         return () => clearInterval(interval)
     }, [])
+
+    // Audio Ref for Ringing Sound
+    const audioRef = useRef<HTMLAudioElement | null>(null)
+
+    // GSAP Refs
+    const cardRefs = useRef<{ [key: string]: HTMLDivElement | null }>({})
+
+    // Initialize Audio
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            audioRef.current = new Audio('/phonering.mp3')
+            audioRef.current.loop = true
+        }
+        return () => {
+            if (audioRef.current) {
+                audioRef.current.pause()
+                audioRef.current = null
+            }
+        }
+    }, [])
+
+    // Play/Pause Audio based on Ringing State
+    useEffect(() => {
+        const isRinging = rooms.some(r => r.status?.toLowerCase() === 'ringing')
+
+        if (isRinging) {
+            // Attempt to play (browser might block if no interaction)
+            audioRef.current?.play().catch((err: any) => {
+                console.log("Audio play blocked (needs interaction):", err)
+            })
+        } else {
+            audioRef.current?.pause()
+            if (audioRef.current) audioRef.current.currentTime = 0
+        }
+    }, [rooms])
+
+    // GSAP Animation Effect
+    useEffect(() => {
+        rooms.forEach((room) => {
+            const el = cardRefs.current[room.id]
+            if (!el) return
+
+            const status = room.status?.toLowerCase()
+
+            // Reset Animation
+            gsap.killTweensOf(el)
+            gsap.set(el, { rotation: 0, scale: 1, x: 0 })
+
+            // Apply Animation based on Status (Matching ExtensionCard logic)
+            if (status === 'ringing') {
+                const tl = gsap.timeline({ repeat: -1, repeatDelay: 0.1 });
+                tl.to(el, { rotation: 2, duration: 0.05 })
+                    .to(el, { rotation: -2, duration: 0.05 })
+                    .to(el, { rotation: 2, duration: 0.05 })
+                    .to(el, { rotation: -2, duration: 0.05 })
+                    .to(el, { rotation: 0, duration: 0.05 });
+            }
+            else if (status === 'calling' || status === 'dialing') {
+                gsap.to(el, {
+                    scale: 1.02,
+                    duration: 0.5,
+                    yoyo: true,
+                    repeat: -1,
+                    ease: "power1.inOut"
+                });
+            }
+            // Add other status animations if needed, but Ringing is the priority request
+        })
+    }, [rooms]) // Re-run when rooms/status update
 
     const loadData = async () => {
         try {
@@ -49,6 +119,7 @@ export default function SystemViewPage() {
         }
     }
 
+    // Refresh Logic
     const handleRefresh = () => {
         setIsRefreshing(true)
         loadData()
@@ -206,6 +277,7 @@ export default function SystemViewPage() {
                             return (
                                 <Card
                                     key={room.id}
+                                    ref={el => { if (el) cardRefs.current[room.id] = el }}
                                     className={`
                                         overflow-hidden transition-all hover:scale-[1.02] hover:shadow-lg
                                         ${getCardStyle()}
