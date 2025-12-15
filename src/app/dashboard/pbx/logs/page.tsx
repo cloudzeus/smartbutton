@@ -101,9 +101,9 @@ export default function PBXLogsPage() {
         // Filter by search query
         if (searchQuery) {
             filtered = filtered.filter(log =>
-                log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                log.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                log.eventName.toLowerCase().includes(searchQuery.toLowerCase())
+                (log.message?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+                (log.category?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+                (log.eventName?.toLowerCase() || '').includes(searchQuery.toLowerCase())
             )
         }
 
@@ -300,7 +300,7 @@ export default function PBXLogsPage() {
                                             </TableCell>
                                             <TableCell>
                                                 <Badge variant="outline" className="font-mono">
-                                                    {log.eventName}
+                                                    {log.eventName || 'N/A'}
                                                 </Badge>
                                             </TableCell>
                                             <TableCell className="max-w-md">

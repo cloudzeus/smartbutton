@@ -243,6 +243,10 @@ async function processEvent(body: any) {
 
         // 30011: Call Status with Members (Complex Payload)
         else if (eventName === '30011' && Array.isArray(eventBody.members)) {
+            // Track if this is a call answered event
+            let isCallAnswered = false;
+            const answeredExtensions: string[] = [];
+
             for (const member of eventBody.members) {
                 // effective member structure: { extension: { number: "56", member_status: "ALERT" } }
                 const extInfo = member.extension;
@@ -250,7 +254,11 @@ async function processEvent(body: any) {
                     let status = 'idle';
                     const s = extInfo.member_status;
                     if (s === 'ALERT' || s === 'RING') status = 'ringing';
-                    else if (s === 'ANSWER' || s === 'CONNECTED') status = 'incall';
+                    else if (s === 'ANSWER' || s === 'CONNECTED') {
+                        status = 'incall';
+                        isCallAnswered = true;
+                        answeredExtensions.push(extInfo.number);
+                    }
                     else if (s === 'RELEASE' || s === 'DISCONNECT') status = 'online';
                     else status = s.toLowerCase();
 
@@ -259,6 +267,23 @@ async function processEvent(body: any) {
                         data: { status, lastSeen: new Date() }
                     }).catch(() => { });
                 }
+            }
+
+            // If call was answered, update the Call record status to 'connected'
+            if (isCallAnswered && eventBody.call_id) {
+                await prisma.call.updateMany({
+                    where: { callId: eventBody.call_id },
+                    data: {
+                        status: 'connected',
+                        answerTime: new Date()
+                    }
+                }).catch(() => { });
+                console.log(`📞 Call ${eventBody.call_id} ANSWERED - Extensions: ${answeredExtensions.join(', ')}`);
+
+                // Note: P550 doesn't support /prompt/upload endpoint
+                // Instead, we'll play the alert.mp3 from our server
+                // The frontend will handle playing the audio when it detects the call is answered
+                // This is already implemented in the extensions page with the announcement audio
             }
         }
 
@@ -276,7 +301,7 @@ async function processEvent(body: any) {
                 // Since members might be null, we rely on existing Call record
                 const call = await prisma.call.findUnique({
                     where: { callId },
-                    select: { extensionId: true }
+                    select: { extensionId: true, fromNumber: true, toNumber: true }
                 }).catch(() => null);
 
                 if (call && call.extensionId) {
@@ -285,6 +310,70 @@ async function processEvent(body: any) {
                         data: { status: 'online' } // Reset to idle
                     }).catch(() => { });
                 }
+            }
+        }
+
+        // 30012: Call End Details (CDR) - Reset both extensions
+        else if (eventName === '30012' || eventName === 'NewCdr') {
+            const callId = eventBody.call_id;
+            if (callId) {
+                // Mark call as ended
+                await prisma.call.updateMany({
+                    where: { callId: callId },
+                    data: { status: 'ended', endTime: new Date() }
+                }).catch(() => { });
+
+                // Reset both caller and callee extensions
+                const fromExt = eventBody.caller || eventBody.from;
+                const toExt = eventBody.callee || eventBody.to;
+
+                if (fromExt) {
+                    await prisma.extension.update({
+                        where: { extensionId: fromExt },
+                        data: { status: 'online', lastSeen: new Date() }
+                    }).catch(() => { });
+                }
+
+                if (toExt) {
+                    await prisma.extension.update({
+                        where: { extensionId: toExt },
+                        data: { status: 'online', lastSeen: new Date() }
+                    }).catch(() => { });
+                }
+
+                console.log(`📞 Call ${callId} ENDED - Extensions reset: ${fromExt} & ${toExt}`);
+            }
+        }
+
+        // 30020: CallOver (uaCSTA Call Report) - Reset extensions
+        else if (eventName === '30020' || eventName === 'CallOver') {
+            const callId = eventBody.call_id;
+            if (callId) {
+                // Mark call as ended
+                await prisma.call.updateMany({
+                    where: { callId: callId },
+                    data: { status: 'ended', endTime: new Date() }
+                }).catch(() => { });
+
+                // Reset extensions involved in the call
+                const fromExt = eventBody.caller || eventBody.from;
+                const toExt = eventBody.callee || eventBody.to;
+
+                if (fromExt) {
+                    await prisma.extension.update({
+                        where: { extensionId: fromExt },
+                        data: { status: 'online', lastSeen: new Date() }
+                    }).catch(() => { });
+                }
+
+                if (toExt) {
+                    await prisma.extension.update({
+                        where: { extensionId: toExt },
+                        data: { status: 'online', lastSeen: new Date() }
+                    }).catch(() => { });
+                }
+
+                console.log(`📞 Call ${callId} OVER - Extensions reset: ${fromExt} & ${toExt}`);
             }
         }
 

@@ -321,6 +321,44 @@ export default function PBXSettingsPage() {
             <Card>
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
+                        <Phone className="h-5 w-5" />
+                        Audio Prompts
+                    </CardTitle>
+                    <CardDescription>
+                        Custom audio files played during calls
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                        <Label>Alert Sound (alert.mp3)</Label>
+                        <p className="text-xs text-muted-foreground">
+                            This audio file is played automatically when a call is answered. The file is served from the public folder.
+                        </p>
+                    </div>
+
+                    <div className="rounded-lg bg-muted p-4 space-y-2">
+                        <p className="text-sm font-semibold">✅ Automatic Playback Enabled</p>
+                        <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+                            <li>alert.mp3 is located in the /public folder</li>
+                            <li>When a call is answered, the alert plays automatically to the caller</li>
+                            <li>After the alert, a TTS announcement plays with the caller's number</li>
+                            <li>No upload needed - the audio is served directly from this server</li>
+                        </ol>
+                    </div>
+
+                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <Badge variant="info">ℹ️</Badge>
+                        <p>
+                            To change the alert sound, replace /public/alert.mp3 with your own audio file (keep the same filename).
+                            Supported formats: MP3, WAV. Recommended: 8kHz-16kHz sample rate for telephony.
+                        </p>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
                         <Settings className="h-5 w-5" />
                         Demo Extensions
                     </CardTitle>

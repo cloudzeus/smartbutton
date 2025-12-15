@@ -105,6 +105,31 @@ export default function ExtensionsPage() {
         }
     }, [extensions]);
 
+    // Close modal when calling extension status changes to 'incall' (faster than call status polling)
+    useEffect(() => {
+        if (!isCallDialogOpen || !callingExtension) return;
+
+        const currentExt = extensions.find(ext => ext.extensionId === callingExtension.extensionId);
+        if (currentExt && currentExt.status?.toLowerCase() === 'incall') {
+            console.log(`✅ Extension ${currentExt.extensionId} is now 'incall' - Closing modal`);
+            setIsCallDialogOpen(false);
+
+            // Play alert.mp3 when modal closes due to call being answered
+            console.log("🔊 Playing alert.mp3 (triggered by extension status)");
+            const alertAudio = new Audio('/alert.mp3');
+            alertAudio.volume = 1.0;
+            alertAudio.play()
+                .then(() => console.log("✅ alert.mp3 playing"))
+                .catch(e => {
+                    console.error("❌ Alert playback failed:", e);
+                    if (e.name === 'NotAllowedError') {
+                        alert("🔊 Call answered! Click OK to hear the alert.");
+                        alertAudio.play().catch(e2 => console.error("Still failed:", e2));
+                    }
+                });
+        }
+    }, [extensions, isCallDialogOpen, callingExtension]);
+
     // Polling for status updates
     useEffect(() => {
         fetchExtensions();
@@ -155,11 +180,11 @@ export default function ExtensionsPage() {
                     else if (s.includes('connect') || s.includes('link') || s.includes('up') || s.includes('answer')) newStatus = 'connected';
                     else if (s.includes('end') || s.includes('hangup') || s.includes('complete') || s.includes('bye') || s.includes('term')) newStatus = 'ended';
                     else if (s.includes('fail') || s.includes('busy') || s.includes('cancel')) newStatus = 'failed';
-                    else if (s === 'active') newStatus = 'calling';
+                    else if (s === 'active' || s === 'calling') newStatus = 'calling';
 
-                    // CLOSE MODAL ON RINGING OR CONNECTED
-                    if ((newStatus === 'ringing' || newStatus === 'connected') && isCallDialogOpen) {
-                        console.log("Closing modal due to status:", newStatus);
+                    // AUTOMATICALLY CLOSE MODAL WHEN CALL IS ANSWERED (CONNECTED)
+                    if (newStatus === 'connected' && isCallDialogOpen) {
+                        console.log("✅ Call ANSWERED - Closing modal, extensions now busy");
                         setIsCallDialogOpen(false);
                     }
 
@@ -167,16 +192,56 @@ export default function ExtensionsPage() {
                         setCallStatus(newStatus);
                     }
 
-                    // Play Announcement on Connect (Once)
+                    // Play Alert and Announcement on Connect (Once)
                     if (newStatus === 'connected' && !hasPlayedAnnouncement.current) {
                         hasPlayedAnnouncement.current = true;
-                        const callerNum = data.data.fromNumber;
-                        if (callerNum) {
-                            console.log("Announcement: Playing for caller", callerNum);
-                            const audio = new Audio(`/api/pbx/announcement?caller=${encodeURIComponent(callerNum)}`);
-                            announcementRef.current = audio;
-                            audio.play().catch(e => console.error("Announcement playback failed:", e));
-                        }
+
+                        // First, play alert.mp3
+                        console.log("🔊 Playing alert.mp3");
+                        console.log("📊 Call status changed to 'connected' - triggering audio");
+
+                        const alertAudio = new Audio('/alert.mp3');
+                        alertAudio.volume = 1.0; // Full volume
+
+                        alertAudio.addEventListener('canplaythrough', () => {
+                            console.log("✅ alert.mp3 loaded and ready to play");
+                        });
+
+                        alertAudio.addEventListener('playing', () => {
+                            console.log("▶️ alert.mp3 is now playing");
+                        });
+
+                        alertAudio.addEventListener('ended', () => {
+                            console.log("✅ alert.mp3 finished playing");
+                        });
+
+                        alertAudio.play()
+                            .then(() => {
+                                console.log("✅ alert.mp3 play() promise resolved successfully");
+                            })
+                            .catch(e => {
+                                console.error("❌ Alert playback failed:", e);
+                                console.error("Error name:", e.name);
+                                console.error("Error message:", e.message);
+
+                                // If autoplay is blocked, show a notification
+                                if (e.name === 'NotAllowedError') {
+                                    console.warn("⚠️ Autoplay blocked by browser. User interaction required.");
+                                    alert("🔊 Call answered! Click OK to hear the alert.");
+                                    alertAudio.play().catch(e2 => console.error("Still failed:", e2));
+                                }
+                            });
+
+                        // Then play TTS announcement after a short delay
+                        setTimeout(() => {
+                            const callerNum = data.data.fromNumber;
+                            if (callerNum) {
+                                console.log("Announcement: Playing TTS for caller", callerNum);
+                                const audio = new Audio(`/api/pbx/announcement?caller=${encodeURIComponent(callerNum)}`);
+                                announcementRef.current = audio;
+                                audio.play().catch(e => console.error("Announcement playback failed:", e));
+                            }
+                        }, 2000); // 2 second delay to let alert play first
                     }
 
                     // Update active call details for UI

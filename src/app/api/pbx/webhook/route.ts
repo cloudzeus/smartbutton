@@ -230,14 +230,68 @@ async function handleCallEvent(event: any) {
             rawStatus = event.msg.call_status || event.msg.status || 'active';
 
             if (event.msg.members && Array.isArray(event.msg.members)) {
-                // Usually the first member is the caller/initiator in an alerting state
-                const member = event.msg.members[0];
-                if (member.extension) {
-                    fromNumber = member.extension.number;
-                    extensionId = member.extension.number;
-                } else if (member.inbound) {
-                    fromNumber = member.inbound.from;
-                    toNumber = member.inbound.to;
+                // Process all members to update their statuses
+                for (const member of event.msg.members) {
+                    if (member.extension) {
+                        const extNumber = member.extension.number;
+                        const memberStatus = member.extension.member_status;
+
+                        // Map member_status to our extension status
+                        let extStatus = 'online';
+                        if (memberStatus === 'ALERT' || memberStatus === 'RING') {
+                            extStatus = 'ringing';
+                        } else if (memberStatus === 'ANSWER' || memberStatus === 'CONNECTED') {
+                            extStatus = 'incall';
+
+                            // Play alert.mp3 to the callee when they answer
+                            console.log(`📞 Extension ${extNumber} ANSWERED - Playing alert to callee`);
+                            try {
+                                const playResponse = await fetch('http://localhost:3000/api/pbx/prompt/play', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        extension: extNumber,
+                                        promptName: 'alert',
+                                        autoAnswer: 'no',
+                                        volume: 15
+                                    })
+                                });
+
+                                if (playResponse.ok) {
+                                    console.log(`🔊 Alert prompt triggered for extension ${extNumber}`);
+                                } else {
+                                    const errorData = await playResponse.json();
+                                    console.warn(`⚠️ Failed to play alert to ${extNumber}:`, errorData.error);
+                                }
+                            } catch (playError) {
+                                console.error(`❌ Error playing alert to ${extNumber}:`, playError);
+                            }
+                        } else if (memberStatus === 'RELEASE' || memberStatus === 'DISCONNECT') {
+                            extStatus = 'online';
+                        }
+
+                        // Update extension status immediately
+                        await prisma.extension.upsert({
+                            where: { extensionId: extNumber },
+                            update: { status: extStatus, lastSeen: new Date() },
+                            create: {
+                                extensionId: extNumber,
+                                name: `Extension ${extNumber}`,
+                                status: extStatus,
+                            },
+                        }).catch(err => console.error(`Failed to update extension ${extNumber}:`, err));
+
+                        console.log(`✅ Extension ${extNumber} status updated: ${extStatus} (member_status: ${memberStatus})`);
+
+                        // Use first member for call record
+                        if (fromNumber === 'unknown') {
+                            fromNumber = extNumber;
+                            extensionId = extNumber;
+                        }
+                    } else if (member.inbound) {
+                        fromNumber = member.inbound.from;
+                        toNumber = member.inbound.to;
+                    }
                 }
             }
         } else {
@@ -327,25 +381,8 @@ async function handleCallEvent(event: any) {
 
         console.log(`✅ Call logged/updated: ${callId} (${status})`);
 
-        // SYNC EXTENSION STATUS
-        // We sync based on the call status
-        const targetExtensionId = call.extensionId || extensionRecord?.id;
-
-        if (targetExtensionId) {
-            let extStatus = 'online';
-            if (status === 'ringing') extStatus = 'ringing';
-            else if (status === 'connected') extStatus = 'busy'; // or 'connected'
-            else if (status === 'ended' || status === 'failed') extStatus = 'online';
-
-            // Special case: If mapping connected -> busy, ensure we don't overwrite if not needed?
-            // Just force update to ensure consistency
-            if (status === 'ringing' || status === 'connected' || status === 'ended' || status === 'failed') {
-                await prisma.extension.update({
-                    where: { id: targetExtensionId },
-                    data: { status: extStatus }
-                }).catch(err => console.error("Failed to sync extension status", err));
-            }
-        }
+        // Note: Extension status is already updated above in the members loop
+        // No need to update again here
     } catch (error) {
         console.error('Failed to handle call event:', error);
     }
