@@ -197,6 +197,10 @@ async function processPBXEvent(event: any) {
             await handleCallEvent(event);
             break;
 
+        case 'Outbound': // Outbound call completed (CDR-like event)
+            await handleOutboundCallComplete(event);
+            break;
+
         case 'extension.status':
         case 'ExtensionStatus':
         case '30007': // Extension Registration Status (Registered/Unregistered/Unreachable)
@@ -431,6 +435,45 @@ async function handleCallEnd(event: any) {
         }
     } catch (error) {
         console.error('Failed to handle call end:', error);
+    }
+}
+
+async function handleOutboundCallComplete(event: any) {
+    try {
+        const callId = event.call_id;
+        const status = event.status?.toLowerCase();
+        const callDuration = event.call_duration || 0;
+        const talkDuration = event.talk_duration || 0;
+
+        if (callId) {
+            // Map status
+            let finalStatus = 'completed';
+            if (status === 'answered') finalStatus = 'completed';
+            else if (status === 'no answer' || status === 'noanswer') finalStatus = 'failed';
+            else if (status === 'busy') finalStatus = 'failed';
+            else if (status === 'failed') finalStatus = 'failed';
+
+            await prisma.call.updateMany({
+                where: { callId },
+                data: {
+                    status: finalStatus,
+                    endTime: new Date(),
+                },
+            });
+
+            console.log(`✅ Outbound call completed: ${callId} (${status}, duration: ${talkDuration}s)`);
+
+            // Reset extension status
+            const fromExt = event.call_from;
+            if (fromExt) {
+                await prisma.extension.update({
+                    where: { extensionId: fromExt },
+                    data: { status: 'online', lastSeen: new Date() }
+                }).catch(() => { });
+            }
+        }
+    } catch (error) {
+        console.error('Failed to handle outbound call complete:', error);
     }
 }
 

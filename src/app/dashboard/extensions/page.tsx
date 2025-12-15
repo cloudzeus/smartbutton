@@ -122,13 +122,18 @@ export default function ExtensionsPage() {
                 .then(() => console.log("✅ alert.mp3 playing"))
                 .catch(e => {
                     console.error("❌ Alert playback failed:", e);
-                    if (e.name === 'NotAllowedError') {
-                        alert("🔊 Call answered! Click OK to hear the alert.");
-                        alertAudio.play().catch(e2 => console.error("Still failed:", e2));
-                    }
+                    // Autoplay blocked - just log it, don't show alert
                 });
         }
     }, [extensions, isCallDialogOpen, callingExtension]);
+
+    // ALSO close modal when callStatus changes to 'connected' (works for external calls)
+    useEffect(() => {
+        if (callStatus === 'connected' && isCallDialogOpen) {
+            console.log("✅ Call status is 'connected' - Closing modal");
+            setIsCallDialogOpen(false);
+        }
+    }, [callStatus, isCallDialogOpen]);
 
     // Polling for status updates
     useEffect(() => {
@@ -223,13 +228,7 @@ export default function ExtensionsPage() {
                                 console.error("❌ Alert playback failed:", e);
                                 console.error("Error name:", e.name);
                                 console.error("Error message:", e.message);
-
-                                // If autoplay is blocked, show a notification
-                                if (e.name === 'NotAllowedError') {
-                                    console.warn("⚠️ Autoplay blocked by browser. User interaction required.");
-                                    alert("🔊 Call answered! Click OK to hear the alert.");
-                                    alertAudio.play().catch(e2 => console.error("Still failed:", e2));
-                                }
+                                // Autoplay blocked - just log it, don't show alert
                             });
 
                         // Then play TTS announcement after a short delay
