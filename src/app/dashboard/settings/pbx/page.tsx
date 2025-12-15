@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Settings, Phone, CheckCircle, XCircle, Loader2 } from "lucide-react"
+import AlertRecipientsCard from "@/components/alert-recipients-card"
 
 export default function PBXSettingsPage() {
     const [settings, setSettings] = useState({
@@ -389,6 +390,9 @@ export default function PBXSettingsPage() {
                     </div>
                 </CardContent>
             </Card>
+
+            {/* Alert Recipients Configuration */}
+            <AlertRecipientsCard />
 
             <div className="flex justify-end gap-2">
                 <Button

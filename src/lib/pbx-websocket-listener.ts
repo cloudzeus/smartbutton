@@ -77,9 +77,13 @@ export async function startPBXWebSocket() {
             console.error('❌ PBX WebSocket Error:', error.message);
         });
 
-        wsClient.on('close', () => {
-            console.warn('⚠️ PBX WebSocket Closed. Reconnecting in 5s...');
+        wsClient.on('close', async () => {
+            console.warn('⚠️ PBX WebSocket Closed. Cleaning up states...');
             stopHeartbeat();
+
+            // Clean up all active call states and extension statuses
+            await cleanupOnDisconnect();
+
             wsClient = null;
             isConnecting = false;
             scheduleReconnect();
@@ -379,5 +383,52 @@ async function processEvent(body: any) {
 
     } catch (e) {
         console.error('Failed to save event to DB:', e);
+    }
+}
+
+/**
+ * Clean up all active states when WebSocket disconnects
+ * This prevents stale UI states and ensures clean reconnection
+ */
+async function cleanupOnDisconnect() {
+    try {
+        console.log('🧹 Cleaning up active call states and extension statuses...');
+
+        // 1. Reset all extensions to 'online' status
+        const updatedExtensions = await prisma.extension.updateMany({
+            where: {
+                status: { in: ['ringing', 'incall', 'busy'] }
+            },
+            data: {
+                status: 'online',
+                lastSeen: new Date()
+            }
+        });
+
+        console.log(`✅ Reset ${updatedExtensions.count} extensions to online`);
+
+        // 2. Mark all active calls as 'ended'
+        const updatedCalls = await prisma.call.updateMany({
+            where: {
+                status: { in: ['calling', 'ringing', 'connected', 'active'] }
+            },
+            data: {
+                status: 'ended',
+                endTime: new Date()
+            }
+        });
+
+        console.log(`✅ Marked ${updatedCalls.count} active calls as ended`);
+
+        // 3. Emit cleanup event to frontend via event bus
+        eventBus.emit('pbx-disconnected', {
+            timestamp: new Date(),
+            message: 'PBX WebSocket disconnected - states cleaned up'
+        });
+
+        console.log('✅ Cleanup complete - ready for reconnection');
+
+    } catch (error) {
+        console.error('❌ Error during cleanup:', error);
     }
 }

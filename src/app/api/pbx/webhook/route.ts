@@ -193,12 +193,16 @@ async function processPBXEvent(event: any) {
             await handleCallEvent(event);
             break;
 
-        case '30020': // uaCSTA Call Report (contains operation like call_start/call_answer)
+        case '30020': // uaCSTA Call Report (contains operation like call_start/call_answer/call_over)
             await handleCallEvent(event);
             break;
 
         case 'Outbound': // Outbound call completed (CDR-like event)
             await handleOutboundCallComplete(event);
+            break;
+
+        case 'Inbound': // Inbound call completed (CDR-like event)
+            await handleInboundCallComplete(event);
             break;
 
         case 'extension.status':
@@ -234,6 +238,10 @@ async function handleCallEvent(event: any) {
             rawStatus = event.msg.call_status || event.msg.status || 'active';
 
             if (event.msg.members && Array.isArray(event.msg.members)) {
+                // Track if any member answered
+                let callAnswered = false;
+                const answeredExtensions: string[] = [];
+
                 // Process all members to update their statuses
                 for (const member of event.msg.members) {
                     if (member.extension) {
@@ -246,6 +254,8 @@ async function handleCallEvent(event: any) {
                             extStatus = 'ringing';
                         } else if (memberStatus === 'ANSWER' || memberStatus === 'CONNECTED') {
                             extStatus = 'incall';
+                            callAnswered = true;
+                            answeredExtensions.push(extNumber);
 
                             // Play alert.mp3 to the callee when they answer
                             console.log(`📞 Extension ${extNumber} ANSWERED - Playing alert to callee`);
@@ -287,6 +297,26 @@ async function handleCallEvent(event: any) {
 
                         console.log(`✅ Extension ${extNumber} status updated: ${extStatus} (member_status: ${memberStatus})`);
 
+                        // If extension is now incall, update any active calls for this extension
+                        if (extStatus === 'incall') {
+                            const ext = await prisma.extension.findUnique({
+                                where: { extensionId: extNumber }
+                            });
+
+                            if (ext) {
+                                await prisma.call.updateMany({
+                                    where: {
+                                        extensionId: ext.id,
+                                        status: { in: ['calling', 'ringing', 'active'] }
+                                    },
+                                    data: {
+                                        status: 'connected',
+                                        answerTime: new Date()
+                                    }
+                                }).catch(() => { });
+                            }
+                        }
+
                         // Use first member for call record
                         if (fromNumber === 'unknown') {
                             fromNumber = extNumber;
@@ -296,6 +326,18 @@ async function handleCallEvent(event: any) {
                         fromNumber = member.inbound.from;
                         toNumber = member.inbound.to;
                     }
+                }
+
+                // If call was answered, update Call record to 'connected'
+                if (callAnswered && callId) {
+                    await prisma.call.updateMany({
+                        where: { callId: callId },
+                        data: {
+                            status: 'connected',
+                            answerTime: new Date()
+                        }
+                    }).catch(() => { });
+                    console.log(`✅ Call ${callId} marked as CONNECTED (answered by: ${answeredExtensions.join(', ')})`);
                 }
             }
         } else {
@@ -458,6 +500,7 @@ async function handleOutboundCallComplete(event: any) {
                 data: {
                     status: finalStatus,
                     endTime: new Date(),
+                    duration: talkDuration, // Save talk duration in seconds
                 },
             });
 
@@ -474,6 +517,46 @@ async function handleOutboundCallComplete(event: any) {
         }
     } catch (error) {
         console.error('Failed to handle outbound call complete:', error);
+    }
+}
+
+async function handleInboundCallComplete(event: any) {
+    try {
+        const callId = event.call_id;
+        const status = event.status?.toLowerCase();
+        const callDuration = event.call_duration || 0;
+        const talkDuration = event.talk_duration || 0;
+        const toExt = event.call_to; // Extension that received the call
+
+        if (callId) {
+            // Map status
+            let finalStatus = 'completed';
+            if (status === 'answered') finalStatus = 'completed';
+            else if (status === 'no answer' || status === 'noanswer') finalStatus = 'failed';
+            else if (status === 'busy') finalStatus = 'failed';
+            else if (status === 'failed') finalStatus = 'failed';
+
+            await prisma.call.updateMany({
+                where: { callId },
+                data: {
+                    status: finalStatus,
+                    endTime: new Date(),
+                    duration: talkDuration,
+                },
+            });
+
+            console.log(`✅ Inbound call completed: ${callId} (${status}, duration: ${talkDuration}s)`);
+
+            // Reset extension status
+            if (toExt) {
+                await prisma.extension.update({
+                    where: { extensionId: toExt },
+                    data: { status: 'online', lastSeen: new Date() }
+                }).catch(() => { });
+            }
+        }
+    } catch (error) {
+        console.error('Failed to handle inbound call complete:', error);
     }
 }
 

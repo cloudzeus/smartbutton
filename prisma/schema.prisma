@@ -149,6 +149,27 @@ model PBXSettings {
   @@unique([name])
 }
 
+// Alert Recipients - Numbers to call when smart button is pressed
+model AlertRecipient {
+  id          String   @id @default(cuid())
+  number      String   // Extension number or external phone number
+  label       String   // Display name (e.g., "Reception", "Manager", "Security")
+  type        RecipientType @default(EXTENSION) // EXTENSION or EXTERNAL
+  order       Int      @default(0) // For drag & drop ordering
+  isActive    Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([order])
+  @@index([isActive])
+}
+
+enum RecipientType {
+  EXTENSION  // Internal PBX extension
+  EXTERNAL   // External phone number
+}
+
 // Extension model to track PBX extensions
 model Extension {
   id            String   @id @default(cuid())
