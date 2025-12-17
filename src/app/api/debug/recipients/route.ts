@@ -12,7 +12,7 @@ export async function GET() {
                 extensionId: true,
                 name: true,
                 status: true,
-                assignedDevice: {
+                milesightDevices: {
                     select: {
                         deviceName: true,
                         serialNumber: true
