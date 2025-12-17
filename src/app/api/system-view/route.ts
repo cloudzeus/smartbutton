@@ -5,9 +5,15 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
     try {
+        // Get all extensions that either:
+        // 1. Are of type ROOM, OR
+        // 2. Have a Milesight device assigned (smart buttons)
         const rooms = await prisma.extension.findMany({
             where: {
-                extensionType: 'ROOM'
+                OR: [
+                    { extensionType: 'ROOM' },
+                    { milesightDevices: { some: {} } } // Has at least one device
+                ]
             },
             select: {
                 id: true,
@@ -15,6 +21,7 @@ export async function GET() {
                 name: true,
                 status: true,
                 roomNumber: true,
+                extensionType: true, // Include type for debugging
                 milesightDevices: {
                     select: {
                         id: true,

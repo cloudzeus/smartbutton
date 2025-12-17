@@ -151,42 +151,65 @@ export async function getAccessToken(type: 'api' | 'websocket' = 'api'): Promise
             continue;
         }
 
-        const baseUrl = `${protocol}://${pbxIp}:${pbxPort}/openapi/v1.0`;
+        // Construct base URL - omit port if it's the default for the protocol
+        // This is critical: PBX routing fails when explicit :443 or :80 is included
+        const isDefaultPort = (protocol === 'https' && pbxPort === '443') || (protocol === 'http' && pbxPort === '80');
+        const baseUrl = isDefaultPort
+            ? `${protocol}://${pbxIp}/openapi/v1.0`
+            : `${protocol}://${pbxIp}:${pbxPort}/openapi/v1.0`;
+
         let currentProtocolLoginData: any = { errcode: -1 }; // Data for current protocol attempt
 
         try {
-            // 1. Try P-Series URL
-            // Updated to use /get_token endpoint as per user configuration
-            const pSeriesUrl = `${baseUrl}/get_token`;
-            console.log(`Trying Auth URL: ${pSeriesUrl}`);
-            let response;
-            let text;
-            try {
-                response = await fetch(pSeriesUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'OpenAPI'
-                    },
-                    body: JSON.stringify({
-                        username: finalClientId,
-                        password: clientSecret
-                    }),
-                });
+            // 1. Try P-Series URLs (oauth/login is standard, get_token is alternative)
+            const authEndpoints = ['/oauth/login', '/get_token'];
 
-                text = await response.text();
+            for (const endpoint of authEndpoints) {
+                const pSeriesUrl = `${baseUrl}${endpoint}`;
+                console.log(`Trying Auth URL: ${pSeriesUrl}`);
+                let response;
+                let text;
                 try {
-                    currentProtocolLoginData = JSON.parse(text);
-                } catch (jsonErr) {
-                    // If JSON parse fails, it's likely an HTML error page or raw socket garbage
-                    console.warn(`Response from ${pSeriesUrl} was not JSON. Preview: ${text.substring(0, 100)}...`);
-                    throw jsonErr;
+                    response = await fetch(pSeriesUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'User-Agent': 'OpenAPI'
+                        },
+                        body: JSON.stringify({
+                            username: finalClientId,
+                            password: clientSecret
+                        }),
+                    });
+
+                    text = await response.text();
+                    try {
+                        currentProtocolLoginData = JSON.parse(text);
+
+                        // If we got a successful response (errcode 0), we're done with this endpoint loop
+                        if (currentProtocolLoginData.errcode === 0 && currentProtocolLoginData.access_token) {
+                            console.log(`✅ Auth successful via ${endpoint}`);
+                            break; // Valid successful response, stop trying other endpoints
+                        }
+
+                        // If we got an error response, log it and continue to next endpoint
+                        console.warn(`${endpoint} returned error ${currentProtocolLoginData.errcode}: ${currentProtocolLoginData.errmsg}`);
+                        continue; // Continue to next endpoint in the loop
+
+                    } catch (jsonErr) {
+                        // If JSON parse fails, it's likely an HTML error page or raw socket garbage
+                        console.warn(`Response from ${pSeriesUrl} was not JSON. Preview: ${text.substring(0, 100)}...`);
+                        // Don't throw here, just continue to next endpoint
+                        continue;
+                    }
+                } catch (e) {
+                    console.warn(`Network error from ${pSeriesUrl} using ${protocol}:`, e);
+                    lastError = e;
+                    // Continue to next endpoint
                 }
-            } catch (e) {
-                console.warn(`Network/Parse error from ${pSeriesUrl} using ${protocol}:`, e);
-                lastError = e;
-                continue; // Try next protocol
             }
+
+            console.log(`📋 Finished trying P-Series endpoints. Result: errcode=${currentProtocolLoginData.errcode}`);
 
             // If P-Series worked (errcode 0), we have our token.
             if (currentProtocolLoginData.errcode === 0 && currentProtocolLoginData.access_token) {
@@ -196,24 +219,32 @@ export async function getAccessToken(type: 'api' | 'websocket' = 'api'): Promise
 
             // If Interface Not Existed (10001) or other errors
             if (currentProtocolLoginData.errcode !== 0) {
-                // CRITICAL: If IP is blocked, STOP IMMEDIATELY. Do not try other protocols.
-                if (currentProtocolLoginData.errcode === 70004) {
-                    console.error('🛑 FATAL: IP ADDRESS BLOCKED PERMANENTLY OR TEAMPORARILY.');
+                // CRITICAL: If IP is blocked or forbidden, STOP IMMEDIATELY. Do not try other protocols.
+                if (currentProtocolLoginData.errcode === 70004 || currentProtocolLoginData.errcode === 70087) {
+                    const errorType = currentProtocolLoginData.errcode === 70004 ? 'BLOCKED' : 'FORBIDDEN';
+                    console.error(`🛑 FATAL: IP ADDRESS ${errorType}.`);
                     console.error('Response:', JSON.stringify(currentProtocolLoginData, null, 2));
-                    throw new Error(`FATAL: ACCOUNT IP BLOCKED. Expires: ${currentProtocolLoginData.block_expire_time}. STOPPING ALL ATTEMPTS.`);
+                    const blockInfo = currentProtocolLoginData.block_expire_time
+                        ? `Expires: ${currentProtocolLoginData.block_expire_time}`
+                        : 'Check PBX IP whitelist settings';
+                    throw new Error(`FATAL: IP ${errorType}. ${blockInfo}. STOPPING ALL ATTEMPTS.`);
                 }
 
-                // CRITICAL FIX: If we are connecting for WebSocket, we MUST use P-Series API.
-                // Falling back to V1.0/S-Series logic will fail anyway (no WebSocket support there)
-                // and attempting it with ClientID/Secret often triggers "Password Error" -> IP BLOCK.
-                if (type === 'websocket') {
-                    console.error('🛑 PBX Auth Failed. Full Response:', JSON.stringify(currentProtocolLoginData, null, 2));
+                // Store the error but continue trying other endpoints
+                // Only throw if we've exhausted all endpoints AND all protocols
+                lastError = new Error(`API Error ${currentProtocolLoginData.errcode}: ${currentProtocolLoginData.errmsg}`);
+
+                // If this is NOT a "route not found" error (10001), and we're doing WebSocket auth,
+                // it's a real auth failure (wrong credentials, etc), so stop trying
+                if (currentProtocolLoginData.errcode !== 10001 && type === 'websocket') {
+                    console.error('🛑 PBX Auth Failed (not a routing issue). Full Response:', JSON.stringify(currentProtocolLoginData, null, 2));
                     throw new Error(`P-Series API Error ${currentProtocolLoginData.errcode}: ${currentProtocolLoginData.errmsg}. Response: ${JSON.stringify(currentProtocolLoginData)}`);
                 }
             }
 
             // If Interface Not Existed (10001), proceed with Fallbacks ONLY for generic API calls that might support legacy
-            if (currentProtocolLoginData.errcode === 10001 || currentProtocolLoginData.status === undefined) {
+            // Skip S-Series fallback for WebSocket auth since those APIs don't support WebSocket
+            if ((currentProtocolLoginData.errcode === 10001 || currentProtocolLoginData.status === undefined) && type !== 'websocket') {
                 console.warn(`P-Series Login failed for ${protocol}. Response:`, JSON.stringify(currentProtocolLoginData));
                 console.warn(`Proceeding to S-Series/V2 path...`);
 
