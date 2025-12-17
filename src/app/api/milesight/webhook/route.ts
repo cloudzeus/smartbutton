@@ -164,80 +164,78 @@ async function triggerAlertSequence(originExtension: string, originName: string)
             const recipient = recipients[i];
             console.log(`👉 Processing Recipient ${i + 1}/${recipients.length}: ${recipient.label} (Number: ${recipient.number})`);
 
-            // Retry logic: Try 3 times
-            const maxAttempts = 3;
-            let attempts = 0;
-            let recipientAnswered = false;
+            try {
+                // Config Check: Prevent calling self or using self as permission
+                if (recipient.number === originExtension) {
+                    console.warn(`⚠️ Skipping recipient ${recipient.label}: Cannot call the Smart Button's own extension (${originExtension}).`);
+                    continue; // Skip to next recipient
+                }
+                if (dialPermission === originExtension) {
+                    console.error(`❌ Configuration Error: Outbound Permission Extension is set to the Smart Button's extension (${originExtension}). This will cause 503 Busy. Please use a registered phone extension.`);
+                }
 
-            while (attempts < maxAttempts && !recipientAnswered) {
-                attempts++;
-                console.log(`   🔄 Attempt ${attempts}/${maxAttempts} for ${recipient.label}...`);
+                // Initiate call via Play Prompt
+                const result = await playAlert(recipient.number, baseUrl, announcementName, dialPermission);
 
-                try {
-                    // Config Check: Prevent calling self or using self as permission
-                    if (recipient.number === originExtension) {
-                        console.warn(`⚠️ Skipping recipient ${recipient.label}: Cannot call the Smart Button's own extension (${originExtension}).`);
-                        break;
-                    }
-                    if (dialPermission === originExtension) {
-                        console.error(`❌ Configuration Error: Outbound Permission Extension is set to the Smart Button's extension (${originExtension}). This will cause 503 Busy. Please use a registered phone extension.`);
-                    }
+                if (result && result.success && result.callId) {
+                    const callId = result.callId;
+                    console.log(`   ✅ Call initiated: ${callId}`);
 
-                    // Initiate call via Play Prompt
-                    const result = await playAlert(recipient.number, baseUrl, announcementName, dialPermission);
-
-                    if (result && result.success && result.callId) {
-                        const callId = result.callId;
-                        console.log(`   ✅ Call initiated: ${callId}`);
-
-                        // Create Call Record in DB so waitForAnswer can track it
-                        await prisma.call.create({
-                            data: {
-                                callId: callId,
-                                extensionId: originExtension, // Associate with Smart Button extension for tracking
-                                fromNumber: originExtension,
-                                toNumber: recipient.number,
-                                direction: 'outbound',
-                                status: 'calling',
-                                startTime: new Date()
-                            }
-                        }).catch(e => console.error('Failed to create call record:', e));
-
-                        // Wait for answer (with 60s timeout)
-                        const answered = await waitForAnswer(callId, recipient.number, 60000, baseUrl);
-
-                        if (answered) {
-                            const answeredTime = new Date().toLocaleTimeString();
-                            console.log(`✅ Alert successfully delivered (Answered) by ${recipient.label} (${recipient.number}) at ${answeredTime}!`);
-
-                            recipientAnswered = true;
-                            anyRecipientAnswered = true;
-                            // Update Call Status to Completed/Ended logic? 
-                            // The listener updates status to 'connected'.
-                            // We don't need to do more, PBX call will end naturally after prompt.
-                            break; // Stop retrying this recipient
-                        } else {
-                            console.warn(`⚠️ Call to ${recipient.label} was NOT answered (Timeout/Busy/Failed).`);
+                    // Create Call Record in DB so waitForAnswer can track it
+                    await prisma.call.create({
+                        data: {
+                            callId: callId,
+                            extensionId: originExtension, // Associate with Smart Button extension for tracking
+                            fromNumber: originExtension,
+                            toNumber: recipient.number,
+                            direction: 'outbound',
+                            status: 'calling',
+                            startTime: new Date()
                         }
+                    }).catch(e => console.error('Failed to create call record:', e));
+
+                    // Wait for answer (with 60s timeout - 1 minute max)
+                    console.log(`   ⏱️  Waiting up to 60 seconds for ${recipient.label} to answer...`);
+                    const answered = await waitForAnswer(callId, recipient.number, 60000, baseUrl);
+
+                    if (answered) {
+                        const answeredTime = new Date().toLocaleTimeString();
+                        console.log(`✅ Alert successfully delivered (Answered) by ${recipient.label} (${recipient.number}) at ${answeredTime}!`);
+
+                        anyRecipientAnswered = true;
+                        // Task completed - stop calling other recipients
+                        console.log('🎉 Task Completed: Call Answered.');
+                        break;
                     } else {
-                        console.error(`❌ Call initiation failed for ${recipient.label}: ${result?.error}`);
+                        console.warn(`⏰ Timeout: ${recipient.label} did NOT answer within 60 seconds.`);
+
+                        // CRITICAL: Terminate the call before moving to next recipient
+                        // This prevents ghost operations where calls keep ringing
+                        console.log(`   🔪 Terminating call ${callId} to ${recipient.label}...`);
+                        try {
+                            await fetch(`${baseUrl}/api/pbx/call/hangup`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ callId })
+                            });
+                            console.log(`   ✅ Call terminated successfully`);
+
+                            // Wait a moment for the PBX to process the hangup
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                        } catch (hangupError) {
+                            console.error(`   ❌ Failed to terminate call:`, hangupError);
+                        }
                     }
-
-                } catch (error) {
-                    console.error(`❌ Error Calling ${recipient.label}:`, error);
+                } else {
+                    console.error(`❌ Call initiation failed for ${recipient.label}: ${result?.error}`);
                 }
 
-                // Delay between retries
-                if (!recipientAnswered && attempts < maxAttempts) {
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                }
+            } catch (error) {
+                console.error(`❌ Error Calling ${recipient.label}:`, error);
             }
 
-            // If this recipient answered, stop calling OTHER recipients too (Task Completed)
-            if (recipientAnswered) {
-                console.log('🎉 Task Completed: Call Answered.');
-                break;
-            }
+            // If someone answered, we already broke out of the loop above
+            // Otherwise, continue to next recipient immediately (no delay, no retries)
         }
 
         if (!anyRecipientAnswered) {
